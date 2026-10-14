@@ -20,7 +20,7 @@ from PyQt5.QtGui import (QBrush, QColor, QDesktopServices, QFont, QIcon, QImage,
 from PyQt5.QtWidgets import (QAbstractItemView, QAction, QActionGroup, QApplication, QCheckBox, QComboBox,
                              QGridLayout,
                              QDialog, QDialogButtonBox, QDockWidget, QDoubleSpinBox, QFileDialog, QFormLayout,
-                             QGraphicsEllipseItem, QGraphicsItemGroup, QGraphicsPathItem, QGraphicsPixmapItem,
+                             QGraphicsEllipseItem, QGraphicsPathItem, QGraphicsPixmapItem,
                              QGraphicsRectItem,
                              QGraphicsScene, QGraphicsSimpleTextItem, QGraphicsView, QHBoxLayout, QHeaderView,
                              QLabel, QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QMessageBox,
@@ -28,6 +28,7 @@ from PyQt5.QtWidgets import (QAbstractItemView, QAction, QActionGroup, QApplicat
                              QVBoxLayout, QWidget)
 
 from . import __version__, catalogs, config, imageio, run, style, wcsio
+from . import shapes as shapes_mod
 from .i18n import set_language, t
 
 ACCENT = "#55DDA0"
@@ -97,7 +98,10 @@ class ImageView(QGraphicsView):
         self.pix = QGraphicsPixmapItem()
         self.pix.setTransformationMode(Qt.SmoothTransformation)
         self.scene().addItem(self.pix)
-        self.overlay = QGraphicsItemGroup()
+        # everything drawn over the picture is a child of this frame-sized item, which clips it to the image
+        self.overlay = QGraphicsRectItem(0, 0, 0, 0)
+        self.overlay.setPen(QPen(Qt.NoPen))
+        self.overlay.setFlag(QGraphicsRectItem.ItemClipsChildrenToShape)
         self.scene().addItem(self.overlay)
         self.setDragMode(QGraphicsView.ScrollHandDrag)
         self.setTransformationAnchor(QGraphicsView.AnchorUnderMouse)
@@ -123,6 +127,7 @@ class ImageView(QGraphicsView):
         self.set_placeholder("")
         self.pix.setPixmap(QPixmap.fromImage(qimage))
         self.setSceneRect(QRectF(0, 0, qimage.width(), qimage.height()))
+        self.overlay.setRect(0, 0, qimage.width(), qimage.height())
         # a small grey copy tells the label placement where the picture is bright
         k = min(1.0, 1200.0 / max(1, qimage.width(), qimage.height()))
         g = qimage.scaled(max(1, int(qimage.width() * k)), max(1, int(qimage.height() * k)),
@@ -185,11 +190,10 @@ class ImageView(QGraphicsView):
 
     def _clear_items(self):
         for it in self.overlay.childItems():
-            self.overlay.removeFromGroup(it)
             self.scene().removeItem(it)
 
-    def draw_overlay(self, shapes, named, grid=None, categories=None, show_named=True):
-        self._overlay_args = (shapes, named, grid, categories, show_named)
+    def draw_overlay(self, shapes, named, grid=None, categories=None, show_named=True, shape_style="outline"):
+        self._overlay_args = (shapes, named, grid, categories, show_named, shape_style)
         self._draw_overlay(*self._overlay_args)
 
     def _relayout(self):
@@ -197,7 +201,7 @@ class ImageView(QGraphicsView):
         if getattr(self, "_overlay_args", None):
             self._draw_overlay(*self._overlay_args)
 
-    def _draw_overlay(self, shapes, named, grid, categories, show_named):
+    def _draw_overlay(self, shapes, named, grid, categories, show_named, shape_style):
         self._clear_items()
         W, H = self.pix.pixmap().width(), self.pix.pixmap().height()
         s = self.transform().m11() or 1.0
@@ -217,7 +221,7 @@ class ImageView(QGraphicsView):
                     path.lineTo(x, y)
                 it = QGraphicsPathItem(path)
                 it.setPen(gpen)
-                self.overlay.addToGroup(it)
+                it.setParentItem(self.overlay)
             if g.get("label_at"):
                 x, y, edge = g["label_at"]
                 it = self._label(x, y, g["label"], gcol, gfont)
@@ -232,20 +236,21 @@ class ImageView(QGraphicsView):
             col = QColor(style.color_for(e))
             pen = QPen(col, 1.6)
             pen.setCosmetic(True)
-            for poly in e.get("polygons") or []:
+            polys, closed = shapes_mod.display_polygons(e, shape_style)
+            for poly in polys:
                 if len(poly) < 2:
                     continue
                 path = QPainterPath(QPointF(*poly[0]))
                 for x, y in poly[1:]:
                     path.lineTo(x, y)
-                if e.get("kind") != "outline":
+                if closed:
                     path.closeSubpath()
                 it = QGraphicsPathItem(path)
                 it.setPen(pen)
-                self.overlay.addToGroup(it)
+                it.setParentItem(self.overlay)
             if e.get("kind") == "point" and "x" in e:
                 self._marker(e["x"], e["y"], 6, col)
-            anchors = style.label_anchors(e, W, H) if e.get("label") else []
+            anchors = style.label_anchors(e, W, H, polys) if e.get("label") else []
             if anchors:
                 prio = 0 if e["label"][:1] == "M" and e["label"][1:2].isdigit() else 1
                 labels.append((prio, anchors, e["label"], col, font, 6 if e.get("kind") == "point" else 0))
@@ -283,7 +288,7 @@ class ImageView(QGraphicsView):
         it.setPen(pen)
         it.setPos(x, y)
         it.setFlag(it.ItemIgnoresTransformations)
-        self.overlay.addToGroup(it)
+        it.setParentItem(self.overlay)
 
     def _label(self, x, y, text, col, font, dx=4, dy=4):
         # An invisible anchor that ignores the view's zoom sits on the object; the text is its child, so the
@@ -296,7 +301,7 @@ class ImageView(QGraphicsView):
         it.setFont(font)
         it.setBrush(QBrush(col))
         it.setPos(dx, dy)
-        self.overlay.addToGroup(anchor)
+        anchor.setParentItem(self.overlay)
         return it
 
 
@@ -484,6 +489,16 @@ class MainWindow(QMainWindow):
             self.chk_groups[key] = c
             grid_lay.addWidget(c, i // 2, i % 2)
         lay.addLayout(grid_lay)
+        row = QHBoxLayout()
+        row.addWidget(QLabel(t("天体形状")))
+        self.cmb_shape = QComboBox()
+        for text, key in (("轮廓线", "outline"), ("圆圈", "circle")):
+            self.cmb_shape.addItem(t(text), key)
+        self.cmb_shape.setCurrentIndex(max(0, self.cmb_shape.findData(self.cfg.get("shape_style", "outline"))))
+        self.cmb_shape.setToolTip(t("轮廓线：有轮廓数据的星云按实际形状描边。圆圈：一律按星表尺寸画圆，长条形天体画成椭圆。"))
+        self.cmb_shape.currentIndexChanged.connect(self._shape_changed)
+        row.addWidget(self.cmb_shape, 1)
+        lay.addLayout(row)
         lay.addWidget(QLabel(t("输出")))
         self.chk = {}
         for key, text in (("write_txt", "天体列表 TXT(PixInsight 格式)"), ("write_preview", "标注预览图"),
@@ -608,6 +623,10 @@ class MainWindow(QMainWindow):
         self.cfg["groups"] = sorted(self._groups_on())
         self._refresh_overlay()
 
+    def _shape_changed(self):
+        self.cfg["shape_style"] = self.cmb_shape.currentData()
+        self._refresh_overlay()
+
     def _toggle_overlay(self):
         self.cfg["show_overlay"] = self.act_overlay.isChecked()
         self._refresh_overlay()
@@ -618,7 +637,7 @@ class MainWindow(QMainWindow):
             on = self._groups_on()
             self.view.draw_overlay(data[0], data[1], data[2] if "grid" in on else None,
                                    categories={k for k in on if k not in ("named", "grid")},
-                                   show_named="named" in on)
+                                   show_named="named" in on, shape_style=self.cmb_shape.currentData())
         else:
             self.view.clear_overlay()
 
@@ -672,7 +691,8 @@ class MainWindow(QMainWindow):
                           out_dir=self.cfg.get("out_dir", ""),
                           stretch=self.cmb_stretch.currentData(),     # the preview looks like the viewer
                           categories=tuple(k for k in self._groups_on() if k not in ("named", "grid")),
-                          named="named" in self._groups_on(), grid="grid" in self._groups_on())
+                          named="named" in self._groups_on(), grid="grid" in self._groups_on(),
+                          shape_style=self.cmb_shape.currentData())
         items = [(r, self.list.item(r).data(Qt.UserRole)) for r in rows]
         for r, _ in items:
             self.list.item(r).setText("⏳ " + os.path.basename(self.list.item(r).data(Qt.UserRole)))

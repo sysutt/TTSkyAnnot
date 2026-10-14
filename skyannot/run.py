@@ -30,6 +30,7 @@ class Options:
     categories: tuple = ("galaxy", "nebula", "cluster", "dark", "other")   # drawn in the preview
     named: bool = True               # named-star labels in the preview
     grid: bool = True                # RA/Dec grid in the preview
+    shape_style: str = "outline"     # "outline" or "circle" (catalogue size) in the preview
 
 
 @dataclass
@@ -172,7 +173,8 @@ def process(path: str, opt: Options, log=print, progress=lambda p, msg: None) ->
         if opt.write_preview:
             p = stem + ".annotated.jpg"
             render.render(disp, res.shapes, res.named if opt.named else None, p,
-                          grid_lines=res.grid if opt.grid else None, categories=set(opt.categories))
+                          grid_lines=res.grid if opt.grid else None, categories=set(opt.categories),
+                          shape_style=opt.shape_style)
             res.outputs["preview"] = p
         if opt.write_wcs:
             p, how = wcsio.write_back(img, wcs, "%s + Gaia DR3 refinement" % stats.get("solver", ""), opt.out_dir)

@@ -65,6 +65,12 @@ _EN = {
     "其他 NGC/IC 条目": "Other NGC/IC entries",
     "亮星名": "Star names",
     "坐标网格": "RA/Dec grid",
+    "天体形状": "Object shapes",
+    "轮廓线": "Outlines",
+    "圆圈": "Circles",
+    "轮廓线：有轮廓数据的星云按实际形状描边。圆圈：一律按星表尺寸画圆，长条形天体画成椭圆。":
+        "Outlines: nebulae with outline data are traced along their shape. Circles: every object is drawn at "
+        "its catalogue size, elongated ones as ellipses.",
 }
 
 _lang = None

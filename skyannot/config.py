@@ -17,6 +17,7 @@ DEFAULTS = {
     "stretch": "auto",         # auto | linked | unlinked | none
     "show_overlay": True,
     "groups": None,            # annotation groups shown (None = all), see gui.GROUPS
+    "shape_style": "outline",  # "outline" (OpenNGC/Stellarium outlines) or "circle" (catalogue size)
     "last_dir": "",
 }
 
