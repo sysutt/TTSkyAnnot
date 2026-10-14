@@ -57,6 +57,14 @@ _EN = {
     "颗星配准": "stars matched",
     "像素": "px",
     "关于": "About",
+    "标注内容": "Show",
+    "星系": "Galaxies",
+    "星云": "Nebulae",
+    "星团": "Clusters",
+    "暗星云": "Dark nebulae",
+    "其他 NGC/IC 条目": "Other NGC/IC entries",
+    "亮星名": "Star names",
+    "坐标网格": "RA/Dec grid",
 }
 
 _lang = None

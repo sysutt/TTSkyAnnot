@@ -139,8 +139,7 @@ def _f(rows, k):
     return np.array([_num(r.get(k)) if r.get(k) not in (None, "") else np.nan for r in rows], float)
 
 
-def star_blocks(P: Projector, ra0, de0, rad, area, epoch, gaia_mag=16.0, gaia_max_area=9.0,
-                gaia_rows=None, log=print):
+def star_blocks(P: Projector, ra0, de0, rad, area, epoch, gaia_mag=16.0, gaia_rows=None, log=print):
     """NamedStars, Hipparcos, Tycho-2 and Gaia DR3 blocks. Returns (blocks, notes)."""
     notes = []
     blocks = []
@@ -225,36 +224,34 @@ def star_blocks(P: Projector, ra0, de0, rad, area, epoch, gaia_mag=16.0, gaia_ma
             blocks.append(Block("TYCHO-2", "Tycho-2 catalog (2,539,913 stars)",
                                 ["Magnitude", "VTmag", "BTmag", "HIP", "Vmag", "Bmag", "B-V index"], rows))
 
-    if area > gaia_max_area:
-        notes.append("Gaia DR3 skipped: field is %.1f square degrees (limit %.0f)" % (area, gaia_max_area))
-    else:
-        g = gaia_rows
-        if g is None:
-            try:
-                g = vizier.cone("gaia", ra0, de0, rad, mag_max=gaia_mag, log=log)
-            except Exception as e:
-                g = []
-                notes.append("Gaia DR3: %s" % e)
-        if g:
-            gm = _f(g, "Gmag")
-            sel = gm <= gaia_mag + 1e-9
-            gg = [r for r, s in zip(g, sel) if s]
-            gra, gde, pmr, pmd = _f(gg, "RA_ICRS"), _f(gg, "DE_ICRS"), _f(gg, "pmRA"), _f(gg, "pmDE")
-            r2000 = refine.propagate(gra, gde, pmr, pmd, 2016.0, 2000.0)
-            rep = refine.propagate(gra, gde, pmr, pmd, 2016.0, epoch)
-            x, y = P.xy(*rep)
-            rows = []
-            for i, r in enumerate(gg):
-                if not P.inside(x[i], y[i]):
-                    continue
-                rows.append(Row("", r2000[0][i], r2000[1][i], x[i], y[i],
-                                [_fmt(_num(r["RPmag"]), 3), _fmt(_num(r["Gmag"]), 3), _fmt(_num(r["BPmag"]), 3),
-                                 _fmt(_num(r["Plx"]), 4), ""], _num(r["Gmag"]), {"source_id": r["Source"]}))
-            rows.sort(key=lambda r: r.mag if r.mag is not None else 99)
-            if rows:
-                blocks.append(Block("Gaia DR3", "Gaia Data Release 3, VizieR I/355/gaiadr3 (Gaia Collaboration, "
-                                    "2022), G <= %.1f" % gaia_mag,
-                                    ["RPmag", "Gmag", "BPmag", "Parallax", "Flags"], rows))
+    # PixInsight's annotation skips Gaia above 9 square degrees because its local catalogue is slow; here the
+    # query is capped brightest-first instead (run.Options.gaia_max_rows), so wide fields keep their parallaxes.
+    g = gaia_rows
+    if g is None:
+        try:
+            g = vizier.cone("gaia", ra0, de0, rad, mag_max=gaia_mag, log=log)
+        except Exception as e:
+            g = []
+            notes.append("Gaia DR3: %s" % e)
+    if g:
+        gm = _f(g, "Gmag")
+        gg = [r for r, s in zip(g, gm <= gaia_mag + 1e-9) if s]
+        gra, gde, pmr, pmd = _f(gg, "RA_ICRS"), _f(gg, "DE_ICRS"), _f(gg, "pmRA"), _f(gg, "pmDE")
+        r2000 = refine.propagate(gra, gde, pmr, pmd, 2016.0, 2000.0)
+        rep = refine.propagate(gra, gde, pmr, pmd, 2016.0, epoch)
+        x, y = P.xy(*rep)
+        rows = []
+        for i, r in enumerate(gg):
+            if not P.inside(x[i], y[i]):
+                continue
+            rows.append(Row("", r2000[0][i], r2000[1][i], x[i], y[i],
+                            [_fmt(_num(r["RPmag"]), 3), _fmt(_num(r["Gmag"]), 3), _fmt(_num(r["BPmag"]), 3),
+                             _fmt(_num(r["Plx"]), 4), ""], _num(r["Gmag"]), {"source_id": r["Source"]}))
+        rows.sort(key=lambda r: r.mag if r.mag is not None else 99)
+        if rows:
+            blocks.append(Block("Gaia DR3", "Gaia Data Release 3, VizieR I/355/gaiadr3 (Gaia Collaboration, "
+                                "2022), G <= %.1f" % gaia_mag,
+                                ["RPmag", "Gmag", "BPmag", "Parallax", "Flags"], rows))
     return blocks, notes
 
 

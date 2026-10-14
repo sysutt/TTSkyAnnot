@@ -24,6 +24,26 @@ def _ellipse_world(ra, dec, maj_arcmin, min_arcmin, pa_deg, n=72):
     return ra_p, dec_p
 
 
+CATEGORIES = ("galaxy", "nebula", "cluster", "dark", "other")
+
+
+def category(entry) -> str:
+    """Which annotation group an object belongs to (the user switches groups on and off)."""
+    t = entry.get("type") or ""
+    name = entry.get("name") or ""
+    if entry.get("catalog") == "Sharpless":
+        return "nebula"
+    if t in ("G", "GPair", "GTrpl", "GGroup"):
+        return "galaxy"
+    if t in ("OCl", "GCl", "*Ass", "Cl+N"):
+        return "cluster"
+    if t == "DrkN" or name.startswith(("B", "LDN")):
+        return "dark"
+    if t in ("PN", "HII", "EmN", "Neb", "RfN", "SNR") or entry.get("kind") == "outline":
+        return "nebula"
+    return "other"                         # stars, double stars, novae and other NGC/IC entries
+
+
 def collect(P, include_others=True, min_size_px=6.0):
     """Shapes of objects that touch the frame. Returns a list of dicts:
     {name, label, catalog, kind: outline|ellipse|circle, source, ra, dec, polygons: [[[x, y], ...], ...]}.
@@ -86,6 +106,7 @@ def collect(P, include_others=True, min_size_px=6.0):
         out.append(entry)
     for o in out:
         o.setdefault("catalog", "Outline")
+        o["category"] = category(o)
         if "x" not in o and o["polygons"]:
             xs = [p[0] for poly in o["polygons"] for p in poly]
             ys = [p[1] for poly in o["polygons"] for p in poly]

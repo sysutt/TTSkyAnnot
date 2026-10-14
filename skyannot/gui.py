@@ -18,19 +18,22 @@ from PyQt5.QtCore import QPointF, QRectF, Qt, QThread, QUrl, pyqtSignal
 from PyQt5.QtGui import (QBrush, QColor, QDesktopServices, QFont, QIcon, QImage, QKeySequence, QPainter,
                          QPainterPath, QPalette, QPen, QPixmap)
 from PyQt5.QtWidgets import (QAbstractItemView, QAction, QActionGroup, QApplication, QCheckBox, QComboBox,
+                             QGridLayout,
                              QDialog, QDialogButtonBox, QDockWidget, QDoubleSpinBox, QFileDialog, QFormLayout,
                              QGraphicsEllipseItem, QGraphicsItemGroup, QGraphicsPathItem, QGraphicsPixmapItem,
+                             QGraphicsRectItem,
                              QGraphicsScene, QGraphicsSimpleTextItem, QGraphicsView, QHBoxLayout, QHeaderView,
                              QLabel, QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QMessageBox,
                              QPlainTextEdit, QProgressBar, QPushButton, QTableWidget, QTableWidgetItem, QToolBar,
                              QVBoxLayout, QWidget)
 
-from . import __version__, catalogs, config, imageio, run, wcsio
+from . import __version__, catalogs, config, imageio, run, style, wcsio
 from .i18n import set_language, t
 
 ACCENT = "#55DDA0"
-SHAPE_COLORS = {"outline": "#5EE1FF", "galaxy": "#FFB347", "nebula": "#FF6B8A", "cluster": "#FFD84D",
-                "dark": "#96AAD2", "star": "#EBEBEB"}
+# annotation groups the user can switch on and off: (key, label)
+GROUPS = (("galaxy", "星系"), ("nebula", "星云"), ("cluster", "星团"), ("dark", "暗星云"),
+          ("other", "其他 NGC/IC 条目"), ("named", "亮星名"), ("grid", "坐标网格"))
 
 
 # ───────────────────────────── workers ─────────────────────────────
@@ -45,7 +48,8 @@ class LoadWorker(QThread):
         out = {"path": self.path}
         try:
             img = imageio.load(self.path)
-            disp = imageio.display_stretch(img, self.stretch)
+            out["mode"] = imageio.auto_mode(img) if self.stretch == "auto" else self.stretch
+            disp = imageio.display_stretch(img, out["mode"])
             a = np.ascontiguousarray((np.clip(disp, 0, 1) * 255 + 0.5).astype(np.uint8))
             h, w = a.shape[:2]
             out["qimage"] = QImage(a.data, w, h, 3 * w, QImage.Format_RGB888).copy()
@@ -54,9 +58,9 @@ class LoadWorker(QThread):
             out["wcs"] = wcs
             if wcs is not None:
                 try:
-                    out["shapes"], out["named"] = run.local_overlay(img, wcs)
+                    out["shapes"], out["named"], out["grid"] = run.local_overlay(img, wcs)
                 except Exception:
-                    out["shapes"], out["named"] = [], []
+                    out["shapes"], out["named"], out["grid"] = [], [], []
         except Exception as e:
             out["error"] = "%s: %s" % (type(e).__name__, e)
         self.done.emit(out)
@@ -119,6 +123,14 @@ class ImageView(QGraphicsView):
         self.set_placeholder("")
         self.pix.setPixmap(QPixmap.fromImage(qimage))
         self.setSceneRect(QRectF(0, 0, qimage.width(), qimage.height()))
+        # a small grey copy tells the label placement where the picture is bright
+        k = min(1.0, 1200.0 / max(1, qimage.width(), qimage.height()))
+        g = qimage.scaled(max(1, int(qimage.width() * k)), max(1, int(qimage.height() * k)),
+                          Qt.IgnoreAspectRatio, Qt.SmoothTransformation).convertToFormat(QImage.Format_Grayscale8)
+        ptr = g.bits()
+        ptr.setsize(g.byteCount())
+        arr = np.frombuffer(ptr, np.uint8).reshape(g.height(), g.bytesPerLine())[:, :g.width()]
+        self._bright = style.Brightness(arr.astype(np.float32) / 255.0, k)
         if not keep_view:
             self.fit()
 
@@ -127,11 +139,13 @@ class ImageView(QGraphicsView):
             return
         self._fit = True
         self.fitInView(self.pix, Qt.KeepAspectRatio)
+        self._relayout()
         self.zoom_changed.emit(self.transform().m11())
 
     def one_to_one(self):
         self._fit = False
         self.setTransform(self.transform().fromScale(1.0, 1.0))
+        self._relayout()
         self.zoom_changed.emit(1.0)
 
     def wheelEvent(self, ev):
@@ -140,6 +154,7 @@ class ImageView(QGraphicsView):
         if 0.02 < s < 40:
             self._fit = False
             self.scale(k, k)
+            self._relayout()
             self.zoom_changed.emit(s)
 
     def resizeEvent(self, ev):
@@ -165,17 +180,57 @@ class ImageView(QGraphicsView):
 
     # overlay -------------------------------------------------------------
     def clear_overlay(self):
+        self._overlay_args = None
+        self._clear_items()
+
+    def _clear_items(self):
         for it in self.overlay.childItems():
             self.overlay.removeFromGroup(it)
             self.scene().removeItem(it)
 
-    def draw_overlay(self, shapes, named):
-        self.clear_overlay()
-        font = QFont()
-        font.setPointSize(9)
+    def draw_overlay(self, shapes, named, grid=None, categories=None, show_named=True):
+        self._overlay_args = (shapes, named, grid, categories, show_named)
+        self._draw_overlay(*self._overlay_args)
+
+    def _relayout(self):
+        """Labels are laid out in screen pixels, so they are placed again when the zoom changes."""
+        if getattr(self, "_overlay_args", None):
+            self._draw_overlay(*self._overlay_args)
+
+    def _draw_overlay(self, shapes, named, grid, categories, show_named):
+        self._clear_items()
+        W, H = self.pix.pixmap().width(), self.pix.pixmap().height()
+        s = self.transform().m11() or 1.0
+        font = QFont("Segoe UI", 9, QFont.DemiBold)
+        sfont = QFont("Segoe UI", 9)
+        gfont = QFont("Segoe UI", 8)
+        gcol = QColor(style.GRID_COLOR)
+        lcol = QColor(gcol)
+        lcol.setAlphaF(style.GRID_LINE_ALPHA)
+        gpen = QPen(lcol, 1.0)
+        gpen.setCosmetic(True)
+        grid_boxes = []                                                 # image px; object labels avoid them
+        for g in grid or []:
+            for seg in g["polylines"]:
+                path = QPainterPath(QPointF(*seg[0]))
+                for x, y in seg[1:]:
+                    path.lineTo(x, y)
+                it = QGraphicsPathItem(path)
+                it.setPen(gpen)
+                self.overlay.addToGroup(it)
+            if g.get("label_at"):
+                x, y, edge = g["label_at"]
+                it = self._label(x, y, g["label"], gcol, gfont)
+                r = it.boundingRect()
+                ox, oy = {"right": -r.width() - 4}.get(edge, 4), {"bottom": -r.height() - 2}.get(edge, 2)
+                it.setPos(ox, oy)                                       # keep the label inside the frame
+                grid_boxes.append((x + ox / s, y + oy / s, x + (ox + r.width()) / s, y + (oy + r.height()) / s))
+        labels = []
         for e in shapes or []:
-            col = QColor(_shape_color(e))
-            pen = QPen(col, 1.4)
+            if categories is not None and e.get("category") not in categories:
+                continue
+            col = QColor(style.color_for(e))
+            pen = QPen(col, 1.6)
             pen.setCosmetic(True)
             for poly in e.get("polygons") or []:
                 if len(poly) < 2:
@@ -190,17 +245,40 @@ class ImageView(QGraphicsView):
                 self.overlay.addToGroup(it)
             if e.get("kind") == "point" and "x" in e:
                 self._marker(e["x"], e["y"], 6, col)
-            if e.get("label") and "x" in e:
-                self._label(e["x"], e["y"], e["label"], col, font)
-        for r in named or []:
-            col = QColor(SHAPE_COLORS["star"])
+            anchors = style.label_anchors(e, W, H) if e.get("label") else []
+            if anchors:
+                prio = 0 if e["label"][:1] == "M" and e["label"][1:2].isdigit() else 1
+                labels.append((prio, anchors, e["label"], col, font, 6 if e.get("kind") == "point" else 0))
+        for r in (named or []) if show_named else []:
+            col = QColor(style.STAR_COLOR)
             self._marker(r.x, r.y, 7, col)
             name = r.name + (" " + r.extra.get("common") if r.extra.get("common") else "")
-            self._label(r.x, r.y, name, col, font, dx=9, dy=-8)
+            labels.append((2, [(r.x, r.y, None)], name, col, sfont, 7))
+        # greedy placement in screen pixels: outside each outline (or around a point), inside the frame, clear
+        # of labels already placed and preferably on a dark background; Messier objects choose first, star
+        # names last
+        placed = list(grid_boxes)
+        for _p, anchors, text, col, f, rad in sorted(labels, key=lambda lb: lb[0]):
+            it = self._label(0, 0, text, col, f)
+            bw, bh = it.boundingRect().width(), it.boundingRect().height()
+            gap = 5 + rad
+            boxes = []
+            for ax, ay, outward in anchors:
+                sx, sy = ax * s, ay * s
+                for ox, oy in style.label_offsets(outward, bw, bh, gap):
+                    bx = min(max(sx + ox, 2), W * s - bw - 2)
+                    by = min(max(sy + oy, 2), H * s - bh - 2)
+                    boxes.append((ax, ay, bx, by))
+            rects = [(bx / s, by / s, (bx + bw) / s, (by + bh) / s) for _ax, _ay, bx, by in boxes]  # image px
+            best = style.choose_box(rects, placed, getattr(self, "_bright", None))
+            ax, ay, bx, by = boxes[rects.index(best)]
+            placed.append(best)
+            it.parentItem().setPos(ax, ay)
+            it.setPos(bx - ax * s, by - ay * s)
 
     def _marker(self, x, y, r, col):
         it = QGraphicsEllipseItem(-r, -r, 2 * r, 2 * r)
-        pen = QPen(col, 1.2)
+        pen = QPen(col, 1.4)
         pen.setCosmetic(True)
         it.setPen(pen)
         it.setPos(x, y)
@@ -208,30 +286,18 @@ class ImageView(QGraphicsView):
         self.overlay.addToGroup(it)
 
     def _label(self, x, y, text, col, font, dx=4, dy=4):
-        # a dark copy one pixel down-right keeps the text readable on bright nebulae
-        for off, brush in ((1, QColor(0, 0, 0, 220)), (0, col)):
-            it = QGraphicsSimpleTextItem(text)
-            it.setFont(font)
-            it.setBrush(QBrush(brush))
-            it.setPos(x, y)
-            it.setFlag(it.ItemIgnoresTransformations)
-            it.setTransform(it.transform().fromTranslate(dx + off, dy + off))
-            self.overlay.addToGroup(it)
-
-
-def _shape_color(e):
-    if e.get("kind") == "outline":
-        return SHAPE_COLORS["outline"]
-    tp = e.get("type") or ""
-    if e.get("catalog") == "Sharpless":
-        return SHAPE_COLORS["nebula"]
-    if tp.startswith("G"):
-        return SHAPE_COLORS["galaxy"]
-    if tp in ("OCl", "GCl", "Cl+N", "*Ass"):
-        return SHAPE_COLORS["cluster"]
-    if tp == "DrkN":
-        return SHAPE_COLORS["dark"]
-    return SHAPE_COLORS["nebula"]
+        # An invisible anchor that ignores the view's zoom sits on the object; the text is its child, so the
+        # (dx, dy) offset stays in screen pixels at any zoom (an item transform would be scaled with it).
+        anchor = QGraphicsRectItem(0, 0, 0, 0)
+        anchor.setPen(QPen(Qt.NoPen))
+        anchor.setFlag(anchor.ItemIgnoresTransformations)
+        anchor.setPos(x, y)
+        it = QGraphicsSimpleTextItem(text, anchor)
+        it.setFont(font)
+        it.setBrush(QBrush(col))
+        it.setPos(dx, dy)
+        self.overlay.addToGroup(anchor)
+        return it
 
 
 # ───────────────────────────── dialogs ─────────────────────────────
@@ -338,7 +404,7 @@ class MainWindow(QMainWindow):
         self.loader = None
         self.worker = None
         self.results = {}           # path -> Result
-        self.overlay_data = {}      # path -> (shapes, named)
+        self.overlay_data = {}      # path -> (shapes, named, grid)
 
         self.view = ImageView()
         self.view.set_placeholder(t("把图片拖到这里,或点「打开」"))
@@ -406,6 +472,18 @@ class MainWindow(QMainWindow):
         self.ed_target.setPlaceholderText(t("目标名(可选)"))
         self.ed_target.setToolTip(t("例如 M31。没有文件头的 JPG/PNG 盲解失败时填它"))
         lay.addWidget(self.ed_target)
+        lay.addWidget(QLabel(t("标注内容")))
+        self.chk_groups = {}
+        saved = self.cfg.get("groups")
+        grid_lay = QGridLayout()
+        grid_lay.setContentsMargins(0, 0, 0, 0)
+        for i, (key, text) in enumerate(GROUPS):
+            c = QCheckBox(t(text))
+            c.setChecked(True if saved is None else key in saved)
+            c.toggled.connect(self._groups_changed)
+            self.chk_groups[key] = c
+            grid_lay.addWidget(c, i // 2, i % 2)
+        lay.addLayout(grid_lay)
         lay.addWidget(QLabel(t("输出")))
         self.chk = {}
         for key, text in (("write_txt", "天体列表 TXT(PixInsight 格式)"), ("write_preview", "标注预览图"),
@@ -504,21 +582,31 @@ class MainWindow(QMainWindow):
         res = self.results.get(out["path"])
         self.wcs = res.wcs if (res and res.ok) else out.get("wcs")
         if res and res.ok:
-            self.overlay_data[out["path"]] = (res.shapes, res.named)
+            self.overlay_data[out["path"]] = (res.shapes, res.named, res.grid)
         elif out.get("wcs") is not None:
-            self.overlay_data[out["path"]] = (out.get("shapes"), out.get("named"))
+            self.overlay_data[out["path"]] = (out.get("shapes"), out.get("named"), out.get("grid"))
         self.view.set_image(out["qimage"], keep_view=getattr(self, "_keep_view", False))
         self._refresh_overlay()
         im = self.img
-        self.lbl_info.setText("%s   %d × %d   %s%s   %s" % (
+        mode_name = {"linked": t("联动"), "unlinked": t("分通道"), "none": t("不拉伸")}.get(out.get("mode"), "")
+        stretch_txt = ("%s: %s%s" % (t("拉伸"), t("自动") + " → " if self.cmb_stretch.currentData() == "auto" else "",
+                                     mode_name)) if im.linear else ""
+        self.lbl_info.setText("%s   %d × %d   %s%s   %s   %s" % (
             os.path.basename(im.path), im.width, im.height, im.fmt.upper(),
-            "  (linear)" if im.linear else "", t("已解析") if self.wcs is not None else t("未解析")))
+            "  (linear)" if im.linear else "", t("已解析") if self.wcs is not None else t("未解析"), stretch_txt))
         self.setWindowTitle("%s — TTSkyAnnot" % os.path.basename(im.path))
 
     def _stretch_changed(self):
         self.cfg["stretch"] = self.cmb_stretch.currentData()
         if self.current:
             self.show_image(self.current, keep_view=True)
+
+    def _groups_on(self):
+        return {k for k, c in self.chk_groups.items() if c.isChecked()}
+
+    def _groups_changed(self):
+        self.cfg["groups"] = sorted(self._groups_on())
+        self._refresh_overlay()
 
     def _toggle_overlay(self):
         self.cfg["show_overlay"] = self.act_overlay.isChecked()
@@ -527,7 +615,10 @@ class MainWindow(QMainWindow):
     def _refresh_overlay(self):
         data = self.overlay_data.get(self.current)
         if self.act_overlay.isChecked() and data:
-            self.view.draw_overlay(*data)
+            on = self._groups_on()
+            self.view.draw_overlay(data[0], data[1], data[2] if "grid" in on else None,
+                                   categories={k for k in on if k not in ("named", "grid")},
+                                   show_named="named" in on)
         else:
             self.view.clear_overlay()
 
@@ -578,7 +669,10 @@ class MainWindow(QMainWindow):
                           nova_key=self.cfg.get("nova_api_key", ""), gaia_mag=float(self.cfg.get("gaia_mag", 16)),
                           write_txt=self.cfg["write_txt"], write_preview=self.cfg["write_preview"],
                           write_outlines=self.cfg["write_outlines"], write_wcs=self.cfg["write_wcs"],
-                          out_dir=self.cfg.get("out_dir", ""))
+                          out_dir=self.cfg.get("out_dir", ""),
+                          stretch=self.cmb_stretch.currentData(),     # the preview looks like the viewer
+                          categories=tuple(k for k in self._groups_on() if k not in ("named", "grid")),
+                          named="named" in self._groups_on(), grid="grid" in self._groups_on())
         items = [(r, self.list.item(r).data(Qt.UserRole)) for r in rows]
         for r, _ in items:
             self.list.item(r).setText("⏳ " + os.path.basename(self.list.item(r).data(Qt.UserRole)))
@@ -684,6 +778,7 @@ def main(files=None):
     QApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)
     app = QApplication.instance() or QApplication(sys.argv)
     _dark_palette(app)
+    app.setFont(QFont("Microsoft YaHei UI", 9))
     app.setWindowIcon(QIcon(os.path.join(catalogs.data_dir(), "app", "skyannot.png")))
     w = MainWindow(cfg, files)
     w.show()

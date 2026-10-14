@@ -40,8 +40,9 @@ def _fit(det_xy, ra, dec, sip_degree):
                                projection="TAN", sip_degree=sip_degree)
 
 
-def _choose_degree(xy, ra, dec, seed=7, folds=5):
-    """Pick None (TAN) / 2 / 3 by k-fold cross-validated median error. Returns (degree, cv_errors)."""
+def _choose_degree(xy, ra, dec, seed=7, folds=5, failed=None):
+    """Pick None (TAN) / 2 / 3 by k-fold cross-validated median error. Returns (degree, cv_errors).
+    A candidate whose fit raises is skipped; `failed` (a list) collects "order: error" for the log."""
     n = len(xy)
     cands = [None] + ([2] if n >= 20 else []) + ([3] if n >= 40 else [])
     if n < 15:
@@ -54,7 +55,9 @@ def _choose_degree(xy, ra, dec, seed=7, folds=5):
             tr, te = fold != k, fold == k
             try:
                 w = _fit(xy[tr], ra[tr], dec[tr], deg)
-            except Exception:
+            except Exception as ex:
+                if failed is not None:
+                    failed.append("SIP order %s: %s: %s" % (deg, type(ex).__name__, ex))
                 errs = None
                 break
             errs.append(np.hypot(*(_project(w, ra[te], dec[te]) - xy[te]).T))
@@ -111,7 +114,10 @@ def refine(wcs0, det_xy, width, height, cat_ra, cat_dec, cat_mag=None, log=print
     # Distortion order chosen by 5-fold cross-validation: with few stars a 3rd-order SIP fits the matched
     # stars better but predicts the others worse (M1 at 0.29"/px, 63 stars: fit 0.25 px, held out 0.42 px).
     n = len(di)
-    deg, cv = _choose_degree(det_xy[di], cat_ra[ci], cat_dec[ci], seed)
+    failed = []
+    deg, cv = _choose_degree(det_xy[di], cat_ra[ci], cat_dec[ci], seed, failed=failed)
+    for f in failed:                                # never silent: a broken fit costs accuracy
+        log("  distortion fit failed, skipped: " + f)
     wcs = _fit(det_xy[di], cat_ra[ci], cat_dec[ci], deg)
     stats = {"matched": int(n), "sip_degree": deg or 0}
     if cv is not None:
