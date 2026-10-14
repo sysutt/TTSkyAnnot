@@ -6,7 +6,7 @@ import os
 
 import numpy as np
 
-from . import style
+from . import shapes as shapes_mod, style
 
 _FONTS = (r"C:\Windows\Fonts\segoeui.ttf", r"C:\Windows\Fonts\arial.ttf",
           "/System/Library/Fonts/Helvetica.ttc", "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf")
@@ -27,10 +27,11 @@ def _font(size, bold=False):
 
 
 def render(display_rgb, shapes, named_rows, out_path, max_edge=4000, quality=92, grid_lines=None,
-           categories=None):
+           categories=None, shape_style="outline"):
     """display_rgb: (h, w, 3) in [0, 1]. shapes: shapes.collect() output. named_rows: annotate.Row list of
     named stars (None or [] = no star labels). grid_lines: grid.compute() output (None = no grid).
-    categories: object groups to draw (None = all). Pixel inputs are in PixInsight convention at full
+    categories: object groups to draw (None = all). shape_style: "outline" or "circle" (catalogue size, see
+    shapes.display_polygons). Pixel inputs are in PixInsight convention at full
     resolution."""
     from PIL import Image, ImageDraw
     h, w = display_rgb.shape[:2]
@@ -70,15 +71,16 @@ def render(display_rgb, shapes, named_rows, out_path, max_edge=4000, quality=92,
         if categories is not None and e.get("category") not in categories:
             continue
         col = style.rgb(style.color_for(e)) + (255,)
-        for poly in e.get("polygons") or []:
+        polys, closed = shapes_mod.display_polygons(e, shape_style)
+        for poly in polys:
             pts = [(x * ks, y * ks) for x, y in poly]
             if len(pts) >= 2:
-                dr.line(pts + [pts[0]] if e["kind"] != "outline" else pts, fill=col, width=lw)
+                dr.line(pts + [pts[0]] if closed else pts, fill=col, width=lw)
         if e.get("kind") == "point":
             x, y = e["x"] * ks, e["y"] * ks
             r = 6 * lw
             dr.ellipse([x - r, y - r, x + r, y + r], outline=col, width=lw)
-        anchors = style.label_anchors(e, w, h) if e.get("label") else []
+        anchors = style.label_anchors(e, w, h, polys) if e.get("label") else []
         if anchors:
             gap = 6 * lw + 3 * SS if e.get("kind") == "point" else 3 * lw
             labels.append(([(x * ks, y * ks, u) for x, y, u in anchors], e["label"], col, font, gap))

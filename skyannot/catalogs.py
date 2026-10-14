@@ -6,10 +6,13 @@ from __future__ import annotations
 
 import csv
 import functools
+import math
 import os
 import re
 import sys
 from dataclasses import dataclass, field
+
+import numpy as np
 
 
 def data_dir() -> str:
@@ -224,13 +227,48 @@ def _read_outlines(path: str, source: str) -> list:
     return polys
 
 
+def _inside(p, q):
+    """Fraction of the vertices of polygon p (n x 2) that lie inside polygon q (ray casting)."""
+    x, y = p[:, 0][:, None], p[:, 1][:, None]
+    x0, y0 = q[:, 0][None, :], q[:, 1][None, :]
+    x1, y1 = np.roll(q[:, 0], -1)[None, :], np.roll(q[:, 1], -1)[None, :]
+    with np.errstate(divide="ignore", invalid="ignore"):
+        cross = ((y0 > y) != (y1 > y)) & (x < (x1 - x0) * (y - y0) / (y1 - y0) + x0)
+    return float(np.mean(cross.sum(axis=1) % 2 == 1))
+
+
+def _outermost(polys: list) -> list:
+    """OpenNGC traces up to three brightness levels of a nebula as nested contours (M20: three rings). One
+    outline per object is enough on a picture: keep the contours that do not lie inside a larger contour of
+    the same object (separate pieces of the outer level all stay)."""
+    groups: dict = {}
+    for i, (name, src, _pts) in enumerate(polys):
+        groups.setdefault((name, src), []).append(i)
+    keep = set()
+    for idx in groups.values():
+        if len(idx) == 1:
+            keep.update(idx)
+            continue
+        ra0, de0 = polys[idx[0]][2][0]
+        c = math.cos(math.radians(de0))
+        xy = {i: np.array([(((ra - ra0 + 180.0) % 360.0 - 180.0) * c, de - de0) for ra, de in polys[i][2]])
+              for i in idx}
+        area = {i: abs(float(np.dot(p[:, 0], np.roll(p[:, 1], -1)) - np.dot(p[:, 1], np.roll(p[:, 0], -1)))) / 2
+                for i, p in xy.items()}
+        for i in idx:
+            if not any(j != i and area[j] > area[i] and _inside(xy[i], xy[j]) >= 0.8 for j in idx):
+                keep.add(i)
+    return [p for i, p in enumerate(polys) if i in keep]
+
+
 @functools.lru_cache(maxsize=1)
 def outlines() -> list:
     """OpenNGC outlines first; Stellarium outlines only for objects OpenNGC does not outline (names are
-    compared after mapping Messier numbers to their NGC/IC designation, so 'M42' and 'NGC1976' match)."""
+    compared after mapping Messier numbers to their NGC/IC designation, so 'M42' and 'NGC1976' match).
+    Only the outermost contour of each object is kept."""
     d = data_dir()
-    onc = _read_outlines(os.path.join(d, "openngc", "outlines_stellarium.dat"), "OpenNGC")
-    stel = _read_outlines(os.path.join(d, "stellarium", "outlines.dat"), "Stellarium")
+    onc = _outermost(_read_outlines(os.path.join(d, "openngc", "outlines_stellarium.dat"), "OpenNGC"))
+    stel = _outermost(_read_outlines(os.path.join(d, "stellarium", "outlines.dat"), "Stellarium"))
     m2n = {o.messier: o.name for o in messier() if o.ngcic}
     covered = {m2n.get(n, n) for n, _, _ in onc}
     return onc + [p for p in stel if m2n.get(p[0], p[0]) not in covered]

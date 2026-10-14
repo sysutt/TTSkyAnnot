@@ -43,11 +43,13 @@ class Brightness:
 def choose_box(boxes, placed, brightness=None):
     """Pick a label rectangle (x0, y0, x1, y1) from candidates in order of preference: one that overlaps no
     placed label, on the darkest background (text on a bright galaxy disc is hard to read), earlier candidates
-    winning when the backgrounds are alike. Falls back to the first candidate when every spot is taken."""
-    free = [(i, b) for i, b in enumerate(boxes)
-            if not any(b[0] < p[2] and b[2] > p[0] and b[1] < p[3] and b[3] > p[1] for p in placed)]
+    winning when the backgrounds are alike. When every spot is taken, the one overlapping the least."""
+    def overlap(b):
+        return sum(max(0.0, min(b[2], p[2]) - max(b[0], p[0])) * max(0.0, min(b[3], p[3]) - max(b[1], p[1]))
+                   for p in placed)
+    free = [(i, b) for i, b in enumerate(boxes) if overlap(b) == 0.0]
     if not free:
-        return boxes[0]
+        return min(boxes, key=overlap)
     if brightness is None:
         return free[0][1]
     return min(free, key=lambda ib: brightness(ib[1]) + 0.02 * ib[0])[1]
@@ -62,13 +64,15 @@ def color_for(entry) -> str:
     return CATEGORY_COLORS.get(entry.get("category"), CATEGORY_COLORS["other"])
 
 
-def label_anchors(entry, width, height):
+def label_anchors(entry, width, height, polygons=None):
     """Where an object's label may go, in image pixels, best first: [(x, y, outward), ...]. An object with an
     outline is labelled outside its outline (right-most point inside the frame first, then the top, left and
     bottom ones and points in between), so the text does not sit on a bright galaxy core or nebula centre and
     a crowded spot can be avoided; `outward` is the unit vector pointing away from the shape there. A
-    point-like object is labelled next to its position (outward None)."""
-    pts = [(x, y) for poly in (entry.get("polygons") or []) for x, y in poly]
+    point-like object is labelled next to its position (outward None). polygons: what is drawn for the
+    object (default: its outline)."""
+    polys = entry.get("polygons") if polygons is None else polygons
+    pts = [(x, y) for poly in (polys or []) for x, y in poly]
     inside = [(x, y) for x, y in pts if 0 <= x <= width and 0 <= y <= height]
     if inside:
         cx = sum(x for x, _ in pts) / len(pts)

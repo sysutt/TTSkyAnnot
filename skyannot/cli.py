@@ -21,6 +21,8 @@ def main(argv=None) -> int:
     ap.add_argument("--no-preview", action="store_true")
     ap.add_argument("--no-outlines", action="store_true")
     ap.add_argument("--no-wcs", action="store_true", help="do not write the solution back to the image")
+    ap.add_argument("--shapes", choices=("outline", "circle"), default=None,
+                    help="objects in the preview: outlines where available, or circles at the catalogue size")
     a = ap.parse_args(argv)
     if not a.annotate:
         from .gui import main as gui_main
@@ -30,7 +32,8 @@ def main(argv=None) -> int:
     opt = run.Options(target=a.target, astap_path=cfg.get("astap_path", ""), nova_key=cfg.get("nova_api_key", ""),
                       gaia_mag=a.gaia_mag if a.gaia_mag is not None else float(cfg.get("gaia_mag", 16)),
                       write_txt=not a.no_txt, write_preview=not a.no_preview, write_outlines=not a.no_outlines,
-                      write_wcs=not a.no_wcs, out_dir=a.out)
+                      write_wcs=not a.no_wcs, out_dir=a.out,
+                      shape_style=a.shapes or cfg.get("shape_style", "outline"))
     bad = 0
     for p in a.images:
         res = run.process(p, opt)

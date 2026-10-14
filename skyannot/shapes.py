@@ -82,7 +82,9 @@ def collect(P, include_others=True, min_size_px=6.0):
     cx, cy = P.xy(ra, dec)
     for i, (d, cat) in enumerate(dsos):
         r_px = ((d.maj or 0) / 2.0) / scale if d.maj else 0.0
-        if not (np.isfinite(cx[i]) and P.inside(cx[i], cy[i], margin=r_px)):
+        # an outlined object is matched even when its catalogue centre is off the frame (M8 below M20): its
+        # outline is in the picture, and the "circles" style needs its catalogue size
+        if not np.isfinite(cx[i]) or (d.name not in outlined and not P.inside(cx[i], cy[i], margin=r_px)):
             continue
         label = d.messier if d.messier else d.name
         if d.messier and d.ngcic and d.ngcic != d.messier:
@@ -90,10 +92,17 @@ def collect(P, include_others=True, min_size_px=6.0):
         entry = {"name": d.name, "label": label + (" %s" % d.common if d.common else ""), "catalog": cat,
                  "type": d.type, "ra": d.ra, "dec": d.dec, "x": round(float(cx[i]), 2), "y": round(float(cy[i]), 2)}
         if d.name in outlined:
+            circle = None
+            if d.maj and 2 * r_px >= min_size_px:          # catalogue size, for the "circles" display style
+                er, ed = _ellipse_world(d.ra, d.dec, d.maj, d.minr, d.pa)
+                x, y = P.xy(er, ed)
+                circle = [[[round(float(a), 2), round(float(b), 2)] for a, b in zip(x, y)]]
             for o in out:
                 if o["name"] == d.name and "x" not in o:
                     o.update({k: v for k, v in entry.items() if k not in ("name",)})
                     o["label"] = entry["label"]
+                    if circle:
+                        o["circle"] = circle
             continue
         if d.maj and 2 * r_px >= min_size_px:
             er, ed = _ellipse_world(d.ra, d.dec, d.maj, d.minr, d.pa)
@@ -111,4 +120,19 @@ def collect(P, include_others=True, min_size_px=6.0):
             xs = [p[0] for poly in o["polygons"] for p in poly]
             ys = [p[1] for poly in o["polygons"] for p in poly]
             o["x"], o["y"] = round(float(np.mean(xs)), 2), round(float(np.mean(ys)), 2)
+        if o["kind"] == "outline" and "circle" not in o and o["polygons"]:
+            # no catalogue size: the circle around the outline
+            pts = np.array([p for poly in o["polygons"] for p in poly], float)
+            cx, cy = (pts.min(axis=0) + pts.max(axis=0)) / 2.0
+            r = float(np.max(np.hypot(pts[:, 0] - cx, pts[:, 1] - cy)))
+            t = np.linspace(0, 2 * np.pi, 72)
+            o["circle"] = [[[round(float(cx + r * np.cos(a)), 2), round(float(cy + r * np.sin(a)), 2)] for a in t]]
     return out
+
+
+def display_polygons(entry, style="outline"):
+    """(polygons, closed) to draw for an object. style "outline": OpenNGC/Stellarium outlines where they
+    exist; "circle": the catalogue size instead (circles, ellipses for elongated objects)."""
+    if style == "circle" and entry.get("circle"):
+        return entry["circle"], True
+    return entry.get("polygons") or [], entry.get("kind") != "outline"
