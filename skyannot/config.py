@@ -16,6 +16,7 @@ DEFAULTS = {
     "out_dir": "",             # "" = next to the image
     "stretch": "auto",         # auto | linked | unlinked | none
     "show_overlay": True,
+    "groups": None,            # annotation groups shown (None = all), see gui.GROUPS
     "last_dir": "",
 }
 

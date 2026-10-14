@@ -18,6 +18,7 @@ a = Analysis(
     # The build machine has many unrelated packages (torch, dask, numba, ...). scipy/astropy reach them
     # through optional imports, so they are excluded explicitly; TTSkyAnnot uses none of them.
     # (astropy imports astropy.tests, astropy.io.votable and yaml at start-up: keep those.)
+    # (fit_wcs_from_points imports astropy.modeling for SIP distortion: without it every SIP fit fails.)
     excludes=["matplotlib", "mpl_toolkits", "IPython", "tkinter", "pandas", "astroquery", "cv2", "PySide6",
               "PyQt6", "notebook", "pytest", "sphinx", "jupyter_client", "zmq", "torch", "torchvision",
               "torchgen", "functorch", "dask", "numba", "llvmlite", "onnx", "onnxruntime", "zarr", "numcodecs",
@@ -27,7 +28,7 @@ a = Analysis(
               "ml_dtypes", "tqdm", "win32com", "pywin", "cffi", "pycparser", "setuptools",
               "pkg_resources", "distutils", "toolz", "tlz", "polars", "duckdb", "pyspark", "ibis", "h5py",
               "astropy.visualization", "astropy.samp", "astropy.timeseries",
-              "astropy.cosmology", "astropy.convolution", "astropy.modeling", "astropy.uncertainty", "scipy.io.matlab", "colorama", "psutil", "filelock", "donfig",
+              "astropy.cosmology", "astropy.convolution", "astropy.uncertainty", "scipy.io.matlab", "colorama", "psutil", "filelock", "donfig",
               "google_crc32c", "pytz", "cycler", "defusedxml", "soupsieve", "webencodings", "multiprocess"],
     noarchive=False,
 )

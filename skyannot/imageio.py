@@ -104,14 +104,45 @@ def _stf(x: np.ndarray, med: float, mad: float, target: float):
     return ((mb - 1.0) * y / ((2.0 * mb - 1.0) * y - mb)).astype(np.float32)
 
 
+def auto_mode(img: LoadedImage, max_cast: float = 0.05) -> str:
+    """What "auto" means for this image: "none" for stretched pictures; for linear data "linked" unless a
+    linked stretch would paint the sky a colour, then "unlinked".
+
+    An uncalibrated one-shot-colour master has very different channel levels: a linked stretch puts its sky
+    at R 0 / G 0.60 / B 0 (M31, 2600MC), a bright green. Colour-calibrated data has a neutral sky and must
+    stay linked to keep its colours (BN+CC 0.198/0.198/0.209, SPCC 0.202/0.202/0.202). The sky level is taken
+    from the darkest quarter of 64 cells, so a galaxy or nebula filling the frame is not mistaken for sky."""
+    if not img.linear:
+        return "none"
+    a = img.data
+    if a.shape[2] < 3:
+        return "linked"
+    h, w = a.shape[:2]
+    cells = []
+    for gy in range(8):
+        for gx in range(8):
+            blk = a[gy * h // 8:(gy + 1) * h // 8:4, gx * w // 8:(gx + 1) * w // 8:4, :3].reshape(-1, 3)
+            cells.append(np.median(blk, axis=0))
+    cells = np.array(cells)
+    sky = np.median(cells[np.argsort(cells.mean(axis=1))[:16]], axis=0)
+    s = a[::4, ::4, :3].reshape(-1, 3)
+    lum = s.mean(axis=1)
+    med = float(np.median(lum))
+    mad = float(np.median(np.abs(lum - med))) * 1.4826
+    out = _stf(sky.astype(np.float32), med, mad, 0.20)
+    return "unlinked" if float(out.max() - out.min()) > max_cast else "linked"
+
+
 def display_stretch(img: LoadedImage, mode: str = "auto", target_median: float = 0.20) -> np.ndarray:
     """Display-ready copy in [0, 1] (h, w, 3).
-    mode: "auto" (linked STF for linear data, unchanged otherwise), "linked", "unlinked" (per channel,
-    neutralises a colour cast in linear data), "none"."""
+    mode: "auto" (see auto_mode), "linked", "unlinked" (per channel, neutralises a colour cast in linear
+    data), "none"."""
     a = img.data
+    if mode == "auto":
+        mode = auto_mode(img)
     if a.shape[2] == 1:
         a = np.repeat(a, 3, axis=2)
-    if mode == "none" or (mode == "auto" and not img.linear):
+    if mode == "none":
         return a
     s = a[::4, ::4].reshape(-1, 3)
     if mode == "unlinked":

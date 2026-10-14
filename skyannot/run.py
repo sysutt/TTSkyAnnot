@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from . import annotate, imageio, refine, render, shapes, solve, starfind, vizier, wcsio
+from . import annotate, grid, imageio, refine, render, shapes, solve, starfind, vizier, wcsio
 
 
 @dataclass
@@ -20,12 +20,16 @@ class Options:
     astap_path: str = ""
     nova_key: str = ""
     gaia_mag: float = 16.0
-    gaia_max_area: float = 9.0       # square degrees; larger fields skip Gaia in the text (PixInsight does too)
+    gaia_max_rows: int = 200000      # brightest-first cap for very wide fields (the text keeps parallaxes)
     write_txt: bool = True
     write_preview: bool = True
     write_outlines: bool = True
     write_wcs: bool = True
     out_dir: str = ""                # empty = next to the image
+    stretch: str = "auto"            # display stretch for star detection and the preview (imageio.display_stretch)
+    categories: tuple = ("galaxy", "nebula", "cluster", "dark", "other")   # drawn in the preview
+    named: bool = True               # named-star labels in the preview
+    grid: bool = True                # RA/Dec grid in the preview
 
 
 @dataclass
@@ -38,6 +42,7 @@ class Result:
     outputs: dict = field(default_factory=dict)
     shapes: list = field(default_factory=list)
     named: list = field(default_factory=list)
+    grid: list = field(default_factory=list)
     notes: list = field(default_factory=list)
 
 
@@ -54,25 +59,24 @@ def _epoch(date_text: str | None, path: str) -> float:
     return t.tm_year + (t.tm_yday - 1) / 365.25
 
 
-def _reference_stars(wcs0, width, height, epoch, gaia_mag, gaia_max_area, log):
-    """Gaia stars for refinement (deeper for small fields) and, when the field is small enough, the rows
-    reused for the annotation text. Returns (ra, dec, mag, rows_for_text or None)."""
+def _reference_stars(wcs0, width, height, epoch, gaia_mag, max_rows, log):
+    """One Gaia query serves both the refinement (deeper for small fields) and the annotation text.
+    Very wide fields are capped brightest-first at max_rows. Returns (ra, dec, mag, rows, faintest_if_capped)."""
     ra0, de0, rad, area = annotate.field_geometry(wcs0, width, height)
-    if area <= gaia_max_area:
-        lim = max(gaia_mag, refine.reference_mag_limit(area))
-        rows = vizier.cone("gaia", ra0, de0, rad, mag_max=lim, log=log)
-    else:
-        lim = 11.0
-        rows = vizier.cone("gaia", ra0, de0, rad, mag_max=lim, max_rows=60000, log=log)
+    lim = max(gaia_mag, refine.reference_mag_limit(area))
+    rows = vizier.cone("gaia", ra0, de0, rad, mag_max=lim, max_rows=max_rows, log=log)
     f = lambda k: np.array([float(r[k]) if r[k] else np.nan for r in rows], float)  # noqa: E731
     ra, de = refine.propagate(f("RA_ICRS"), f("DE_ICRS"), f("pmRA"), f("pmDE"), 2016.0, epoch)
-    return ra, de, f("Gmag"), (rows if area <= gaia_max_area else None), (ra0, de0, rad, area)
+    gm = f("Gmag")
+    capped = float(np.nanmax(gm)) if len(rows) >= max_rows and len(gm) else None
+    return ra, de, gm, rows, capped
 
 
 def local_overlay(img, wcs):
-    """Deep-sky shapes and named stars for an image that already carries a solution (no network)."""
+    """Deep-sky shapes, named stars and the RA/Dec grid for an image that already carries a solution
+    (bundled catalogues only, no network)."""
     P = annotate.Projector(wcs, img.width, img.height)
-    return shapes.collect(P), annotate.named_local(P)
+    return shapes.collect(P), annotate.named_local(P), grid.compute(wcs, img.width, img.height)
 
 
 def process(path: str, opt: Options, log=print, progress=lambda p, msg: None) -> Result:
@@ -81,7 +85,7 @@ def process(path: str, opt: Options, log=print, progress=lambda p, msg: None) ->
     try:
         progress(0.02, "load")
         img = imageio.load(path)
-        disp = imageio.display_stretch(img)
+        disp = imageio.display_stretch(img, opt.stretch)
         hint = imageio.hints(img)
         if opt.target:
             hint["target"] = opt.target.strip()
@@ -96,7 +100,7 @@ def process(path: str, opt: Options, log=print, progress=lambda p, msg: None) ->
         det = np.array([[s[0], s[1]] for s in st])
 
         wcs = stats = None
-        gaia_rows = geom = None
+        gaia_rows = gaia_capped = None
         errors = []
         for name in opt.solvers:
             progress(0.15, "solve:" + name)
@@ -115,8 +119,8 @@ def process(path: str, opt: Options, log=print, progress=lambda p, msg: None) ->
                     continue
                 log("  solved by %s" % name)
                 progress(0.40, "refine")
-                ra, de, mag, gaia_rows, geom = _reference_stars(w0, img.width, img.height, epoch,
-                                                                opt.gaia_mag, opt.gaia_max_area, log)
+                ra, de, mag, gaia_rows, gaia_capped = _reference_stars(w0, img.width, img.height, epoch,
+                                                                       opt.gaia_mag, opt.gaia_max_rows, log)
                 wcs, stats = refine.refine(w0, det, img.width, img.height, ra, de, mag, log=log)
                 stats["solver"] = name
                 break
@@ -132,14 +136,18 @@ def process(path: str, opt: Options, log=print, progress=lambda p, msg: None) ->
         progress(0.60, "catalogues")
         P = annotate.Projector(wcs, img.width, img.height)
         blocks = annotate.dso_blocks(P)
-        sblocks, notes = annotate.star_blocks(P, ra0, de0, rad, area, epoch, opt.gaia_mag, opt.gaia_max_area,
+        sblocks, notes = annotate.star_blocks(P, ra0, de0, rad, area, epoch, opt.gaia_mag,
                                               gaia_rows=gaia_rows, log=log)
+        if gaia_capped is not None:
+            notes.append("Gaia DR3 limited to the brightest %d stars of this wide field (down to G %.2f)"
+                         % (opt.gaia_max_rows, gaia_capped))
         blocks += sblocks
         res.notes = notes
         for n in notes:
             log("  note: " + n)
         res.named = next((b.rows for b in blocks if b.name == "NamedStars"), [])
         res.shapes = shapes.collect(P)
+        res.grid = grid.compute(wcs, img.width, img.height)
         stats["objects"] = {b.name: len(b.rows) for b in blocks}
         log("  " + ", ".join("%s %d" % kv for kv in stats["objects"].items()))
 
@@ -163,7 +171,8 @@ def process(path: str, opt: Options, log=print, progress=lambda p, msg: None) ->
             res.outputs["outlines"] = p
         if opt.write_preview:
             p = stem + ".annotated.jpg"
-            render.render(disp, res.shapes, res.named, p)
+            render.render(disp, res.shapes, res.named if opt.named else None, p,
+                          grid_lines=res.grid if opt.grid else None, categories=set(opt.categories))
             res.outputs["preview"] = p
         if opt.write_wcs:
             p, how = wcsio.write_back(img, wcs, "%s + Gaia DR3 refinement" % stats.get("solver", ""), opt.out_dir)
