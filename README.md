@@ -131,13 +131,25 @@ powershell -File packaging\release.ps1 -Version 0.2.3 -SkipBuild   # 只重新�
    `/var/www/ttastro/ttskyannot/updates`），这样更新源永远不会指向一个还没传上去的包；
 5. 从公网地址 `https://www.ttastro.com/ttskyannot/updates/` 取回 `version.json` 和 zip 的 `Content-Length`
    做校验，证明线上真的生效；
-6. 把同一个构建装到本机 `dist\TTSkyAnnot`、重新签名，并把本机「更新源」设成公网地址；
-7. 把源码提交并推送到 GitHub（`git add -A` + commit + push），再打一个 `v<版本>` 标签一起推上去；
+6. （新）用 Inno Setup 打一个 Windows 安装包 `TTSkyAnnot-Setup-<版本>.exe`，签名后和绿色包一起上传
+   （`/ttskyannot/setup/`，另存一份固定名 `TTSkyAnnot-Setup.exe` 给网页的下载按钮）；
+7. 把同一个构建装到本机 `dist\TTSkyAnnot`、重新签名，并把本机「更新源」设成公网地址；
+8. 把源码提交并推送到 GitHub（`git add -A` + commit + push），再打一个 `v<版本>` 标签一起推上去；
    工作区里有超过 90 MB 的文件（比如误放进来的升级包）时这一步会拒绝提交并提示加进 `.gitignore`，
    推送失败（离线、没有密钥）只记为警告，提交留在本地。
 
 服务器走本机已有的 ARM 密钥（`~\.ssh\ttastro_arm` → `ubuntu@168.138.200.230`），没有密钥时按站点项目的
 HANDOFF 走 tickwhale 中转。本机不装服务器密钥的机器可以用 `-SkipUpload`，只生成本地包。
+
+**安装版与绿色版**：网页上给两个入口——
+
+- 安装版 `https://www.ttastro.com/ttskyannot/setup/TTSkyAnnot-Setup.exe`：Inno Setup 打的安装包，
+  **默认按用户安装**（`%LOCALAPPDATA%\Programs\TTSkyAnnot`，不需要管理员），开始菜单里有「TTSkyAnnot 星图标注」，
+  带卸载项；装在用户目录是为了让程序目录可写——`config.json` 就在旁边，软件内更新也要能改这个目录；
+- 绿色版：`updates/TTSkyAnnot-<版本>.zip`，解压即用，设置同样在程序目录。
+
+压缩包里有一份 `使用说明.txt`：最常见的启动失败是**没有完整解压**（缺少 `_internal`），或者杀毒软件隔离了里面的
+Qt 文件；0.2.6 起程序会自己检测这种情况并弹出中文说明，而不是只报一行 `DLL load failed while importing QtCore`。
 
 **介绍页**：`https://www.ttastro.com/ttskyannot/`，英文版 `https://www.ttastro.com/ttskyannot/en/`
 （源码在站点项目的 `site\ttskyannot\`，复用了 `/assets/site.css` 与 `site.js` 的星空背景与滚动动效；两页互相

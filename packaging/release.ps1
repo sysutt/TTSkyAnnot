@@ -12,6 +12,7 @@
 #   4. uploads the zip first, then version.json, to the server (scp + sudo install) so the feed never points
 #      at a package that is not there yet;
 #   5. fetches the public version.json and the zip's header back over HTTPS to prove it is live;
+#   5b. builds the Windows installer (Inno Setup), signs it and uploads it next to the portable zip;
 #   6. installs the same build into dist\TTSkyAnnot, signs it, and sets its update source to the public URL;
 #   7. commits the source, pushes it, and tags the release (v<ver>) on GitHub.
 #
@@ -32,7 +33,11 @@ param(
     [switch]$SkipBuild,
     [switch]$SkipInstall,
     [switch]$SkipUpload,
-    [switch]$SkipGit
+    [switch]$SkipGit,
+    [switch]$SkipInstaller,
+    [string]$RemoteSetup = "/var/www/ttastro/ttskyannot/setup",
+    [string]$SetupBase = "https://www.ttastro.com/ttskyannot/setup/",
+    [string]$InnoPath = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -111,6 +116,61 @@ if (-not $SkipUpload) {
     $pruneCmd = "cd '$RemoteUpdates' && ls -1t TTSkyAnnot-*.zip | tail -n +3 | xargs -r sudo rm -f && ls -l"
     & ssh @sshOpts $Remote $pruneCmd | ForEach-Object { Write-Host "   $_" }
     if ($LASTEXITCODE -ne 0) { Write-Host "   (could not prune the older packages on the server)" -ForegroundColor Yellow }
+}
+
+# ── 4b. the Windows installer ───────────────────────────────────────────────
+# The portable zip is for people who like a folder; the installer is for everyone else: Start Menu entry,
+# uninstaller, per-user install by default (no admin prompt), which keeps the program folder writable for
+# config.json and the in-app updater.
+if (-not $SkipInstaller) {
+    Step "building the Windows installer"
+    $iscc = $InnoPath
+    if (-not $iscc) {
+        foreach ($c in @((Join-Path $env:LOCALAPPDATA "Programs\Inno Setup 6\ISCC.exe"),
+                         (Join-Path ${env:ProgramFiles(x86)} "Inno Setup 6\ISCC.exe"),
+                         (Join-Path $env:ProgramFiles "Inno Setup 6\ISCC.exe"))) {
+            if ($c -and (Test-Path $c)) { $iscc = $c; break }
+        }
+    }
+    if (-not $iscc) {
+        Write-Host "   Inno Setup not found; the installer is skipped (winget install JRSoftware.InnoSetup)" -ForegroundColor Yellow
+    } else {
+        $setupDir = Join-Path $root "setup"
+        New-Item -ItemType Directory -Force -Path $setupDir | Out-Null
+        & $iscc ("/DVersion=" + $Version) ("/DBuildDir=" + $BuildDir) (Join-Path $PSScriptRoot "installer.iss") |
+            Select-Object -Last 3 | ForEach-Object { Write-Host "   $_" }
+        if ($LASTEXITCODE -ne 0) { Fail "Inno Setup failed ($LASTEXITCODE)" }
+        $setupExe = Join-Path $setupDir ("TTSkyAnnot-Setup-" + $Version + ".exe")
+        if (-not (Test-Path $setupExe)) { Fail "no installer at $setupExe" }
+        & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "sign.ps1") `
+            -Dist $InstallDir -Extra $setupExe | Select-Object -Last 2 | ForEach-Object { Write-Host "   $_" }
+        Write-Host ("   built " + (Split-Path $setupExe -Leaf) + " (" + [math]::Round((Get-Item $setupExe).Length / 1MB, 1) + " MB)") -ForegroundColor Green
+
+        if (-not $SkipUpload) {
+            Step "uploading the installer"
+            $setupName = Split-Path $setupExe -Leaf
+            & scp @sshOpts $setupExe "${Remote}:/tmp/$setupName" | Out-Null
+            if ($LASTEXITCODE -ne 0) {
+                Write-Host "   installer upload failed (skipped)" -ForegroundColor Yellow
+            } else {
+                $cmd = "sudo install -d -o www-data -g www-data '$RemoteSetup' && " +
+                       "sudo install -o www-data -g www-data -m 644 '/tmp/$setupName' '$RemoteSetup/$setupName' && " +
+                       "sudo install -o www-data -g www-data -m 644 '/tmp/$setupName' '$RemoteSetup/TTSkyAnnot-Setup.exe' && " +
+                       "ls -l '$RemoteSetup' | tail -4"
+                & ssh @sshOpts $Remote $cmd | ForEach-Object { Write-Host "   $_" }
+                if ($LASTEXITCODE -ne 0) {
+                    Write-Host "   installing the installer on the server failed" -ForegroundColor Yellow
+                } else {
+                    $live = & curl.exe -s -o NUL -w "%{http_code} %{size_download}" ($SetupBase + "TTSkyAnnot-Setup.exe")
+                    Write-Host ("   live: " + $live) -ForegroundColor Green
+                }
+            }
+        }
+        # keep the two newest installers locally
+        Get-ChildItem $setupDir -Filter "TTSkyAnnot-Setup-*.exe" |
+            Sort-Object LastWriteTime -Descending | Select-Object -Skip 2 |
+            ForEach-Object { Remove-Item $_.FullName -Force; Write-Host ("   removed old installer: " + $_.Name) }
+    }
 }
 
 # ── 5. verify what the public URL serves ────────────────────────────────────
