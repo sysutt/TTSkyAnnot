@@ -1190,27 +1190,32 @@ def main():
     check("a missing ASTAP is logged, not skipped in silence", "astap not found" in text, text[-300:])
     check("and the paths it looked at are named", "nowhere" in text, text[-300:])
 
-    # 4s ── the panel's own vertical rhythm
+    # 4s ── the panel's own vertical rhythm: one caption per group, each with the same air above it
     def _span(widget):
         top = widget.mapTo(win, widget.rect().topLeft()).y()
         return top, top + widget.height()
 
-    last_pill = max(list(win.chk_groups.values()) + list(win.chk_extra.values()),
-                    key=lambda c: _span(c)[0])
-    _pt, pb = _span(last_pill)
-    st, sb = _span(win.cmb_shape)
-    # the Bayer chooser sits between the shape row and the catalogue heading
-    bt, bb = _span(win.cmb_bayer)
-    ct, _cb = _span(win.lbl_cats)
-    check("the shape row is not crowded against the list above it", st - pb >= 10,
-          "%d px (pill %d..%d, shape %d..%d)" % (st - pb, _pt, pb, st, sb))
-    check("the Bayer chooser is not crowded against the shape row", bt - sb >= 10,
-          "%d px (shape ends %d, bayer starts %d)" % (bt - sb, sb, bt))
-    check("the catalogue heading is not crowded against the Bayer chooser", ct - bb >= 10,
-          "%d px (bayer ends %d, heading starts %d)" % (ct - bb, bb, ct))
-    check("and the gaps match, so the panel keeps one rhythm",
-          max(st - pb, bt - sb, ct - bb) - min(st - pb, bt - sb, ct - bb) <= 4,
-          "%d / %d / %d" % (st - pb, bt - sb, ct - bb))
+    last_dso = max(list(win.chk_groups.values()) + list(win.chk_extra.values()),
+                   key=lambda c: _span(c)[0])
+    gaps = [
+        ("the target group starts below the queue", _span(win.lbl_target)[0] - _span(win.list)[1]),
+        ("the star catalogues sit below the target group", _span(win.lbl_cats)[0] - _span(win.ed_coord)[1]),
+        ("the annotation group follows the star catalogues", _span(win.lbl_anno)[0] - _span(win.lbl_named)[1]),
+        ("the display group follows the annotation group", _span(win.lbl_shape)[0] - _span(last_dso)[1]),
+        ("the output group follows the display group", _span(win.lbl_out)[0] - _span(win.cmb_bayer)[1]),
+    ]
+    for text, gap in gaps:
+        check(text, gap >= 6, "%d px" % gap)
+    check("the captions keep one rhythm", max(g for _t, g in gaps) - min(g for _t, g in gaps) <= 6,
+          " / ".join(str(g) for _t, g in gaps))
+    order = [_span(w)[0] for w in (win.lbl_target, win.lbl_cats, win.lbl_anno, win.lbl_shape, win.lbl_out)]
+    check("the groups are in the order the work happens", order == sorted(order), str(order))
+    check("the shape row sits above the Bayer chooser",
+          _span(win.cmb_bayer)[0] - _span(win.cmb_shape)[1] >= 4,
+          "%d px" % (_span(win.cmb_bayer)[0] - _span(win.cmb_shape)[1]))
+    check("the output caption sits above the output switches, not above the catalogues",
+          _span(win.lbl_out)[0] > _span(win.cmb_bayer)[1] and _span(win.lbl_out)[0] < _span(win.chk["write_txt"])[0],
+          "%d / %d / %d" % (_span(win.cmb_bayer)[1], _span(win.lbl_out)[0], _span(win.chk["write_txt"])[0]))
 
     # 4t ── the save dialog's own styling
     dlg = gui.SaveDialog(paths[0], [paths[0] + ".objects.txt"])
