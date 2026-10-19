@@ -15,3 +15,5 @@ build_new/
 updates/
 *.log
 packaging/zone-file-backup.txt
+.scratch*/
+.testfeed/

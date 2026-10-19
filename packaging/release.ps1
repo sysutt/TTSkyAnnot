@@ -12,7 +12,8 @@
 #   4. uploads the zip first, then version.json, to the server (scp + sudo install) so the feed never points
 #      at a package that is not there yet;
 #   5. fetches the public version.json and the zip's header back over HTTPS to prove it is live;
-#   6. installs the same build into dist\TTSkyAnnot, signs it, and sets its update source to the public URL.
+#   6. installs the same build into dist\TTSkyAnnot, signs it, and sets its update source to the public URL;
+#   7. commits the source, pushes it, and tags the release (v<ver>) on GitHub.
 #
 # Server route: this machine has a working key for the ARM host (see ~\.ssh\ttastro_arm); the deploy notes in
 # the site project describe the relay route that is needed when that key is not available.
@@ -30,7 +31,8 @@ param(
     [string]$PublicBase = "https://www.ttastro.com/ttskyannot/updates/",
     [switch]$SkipBuild,
     [switch]$SkipInstall,
-    [switch]$SkipUpload
+    [switch]$SkipUpload,
+    [switch]$SkipGit
 )
 
 $ErrorActionPreference = "Stop"
@@ -149,6 +151,72 @@ if (-not $SkipInstall) {
     }
     $sig = (Get-AuthenticodeSignature (Join-Path $InstallDir "TTSkyAnnot.exe")).Status
     Write-Host "   installed, signature $sig" -ForegroundColor Green
+}
+
+# ── 7. commit and push the source ───────────────────────────────────────────
+# The release is only half done when it is on the server: the code that produced it belongs on GitHub as well,
+# tagged with the same version. Anything the last release left behind (the version bump, notes, new modules)
+# is committed here, so the repository never drifts behind the feed. A failed push is a warning, not an error:
+# the package is already live and the commit stays in the local repository.
+#
+# Git is called through cmd.exe: Windows PowerShell turns a native command's stderr into a terminating error
+# while $ErrorActionPreference is "Stop", and git writes its progress and its warnings there.
+function GitLines([string]$line) {
+    return @(& cmd /c ("git -C `"" + $root + "`" " + $line + " 2>&1"))
+}
+if (-not $SkipGit) {
+    Step "committing and pushing the source"
+    GitLines "rev-parse --is-inside-work-tree" | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "   not a git checkout, skipped" -ForegroundColor Yellow
+    } else {
+        $branch = (@(GitLines "rev-parse --abbrev-ref HEAD") -join "").Trim()
+        GitLines "add -A" | Out-Null
+        $dirty = @(GitLines "status --porcelain") | Where-Object { $_.Trim() }
+        # a 115 MB package in the tree is the one thing GitHub will refuse outright: check before committing
+        $big = @()
+        foreach ($f in @(GitLines "diff --cached --name-only") | Where-Object { $_.Trim() }) {
+            $full = Join-Path $root $f.Trim()
+            if ((Test-Path -LiteralPath $full -PathType Leaf) -and ((Get-Item -LiteralPath $full).Length -gt 90MB)) {
+                $big += $f.Trim()
+            }
+        }
+        if ($big.Count -gt 0) {
+            Write-Host ("   not committing: over 90 MB - " + ($big -join ", ")) -ForegroundColor Yellow
+            Write-Host "   (a feed or build folder inside the repository? add it to .gitignore)" -ForegroundColor Yellow
+            GitLines "reset -q" | Out-Null
+        } elseif ($dirty.Count -gt 0) {
+            $msg = "release: v" + $Version
+            if ($Notes) { $msg = $msg + "`n`n" + $Notes }
+            $msgFile = Join-Path $env:TEMP ("ttskyannot-release-msg-" + $Version + ".txt")
+            [System.IO.File]::WriteAllText($msgFile, $msg, (New-Object System.Text.UTF8Encoding($false)))
+            GitLines ("commit -q -F `"" + $msgFile + "`"") | Out-Null
+            if ($LASTEXITCODE -ne 0) {
+                Write-Host "   commit failed" -ForegroundColor Yellow
+            } else {
+                Write-Host ("   committed " + $dirty.Count + " file(s): " + ((GitLines "log -1 --oneline") -join ""))
+            }
+            Remove-Item -LiteralPath $msgFile -Force -ErrorAction SilentlyContinue
+        } else {
+            Write-Host "   working tree clean"
+        }
+        $push = GitLines ("push origin " + $branch)
+        $push | Where-Object { "$_".Trim() } | ForEach-Object { Write-Host "   $_" }
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "   push failed (offline or no key); the commit is kept locally" -ForegroundColor Yellow
+        }
+        $tag = "v" + $Version
+        if (-not (@(GitLines ("tag -l " + $tag)) | Where-Object { $_.Trim() })) {
+            GitLines ("tag -a " + $tag + " -m `"TTSkyAnnot " + $Version + "`"") | Out-Null
+            $tagOut = GitLines ("push origin " + $tag)
+            $tagOut | Where-Object { "$_".Trim() } | ForEach-Object { Write-Host "   $_" }
+            if ($LASTEXITCODE -ne 0) {
+                Write-Host "   tag push failed; the tag is kept locally" -ForegroundColor Yellow
+            }
+        } else {
+            Write-Host "   tag $tag already exists"
+        }
+    }
 }
 
 Step "done: $Version"
