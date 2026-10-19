@@ -12,6 +12,7 @@
 # The certificate is created once (`-Create`, done already); later builds only re-sign.
 param(
     [string]$Dist = (Join-Path $PSScriptRoot "..\dist\TTSkyAnnot"),
+    [string[]]$Extra = @(),          # other files to sign, e.g. the installer
     [switch]$Create,
     [switch]$Require
 )
@@ -74,8 +75,11 @@ if (-not $signtool) {
 Write-Host ("certificate {0}  {1}  until {2:yyyy-MM-dd}" -f $cert.Thumbprint, $cert.Subject, $cert.NotAfter)
 
 $signed = 0
-foreach ($name in @("TTSkyAnnot.exe", "ttskyannot-cli.exe")) {
-    $exe = Join-Path $Dist $name
+$targets = @()
+foreach ($name in @("TTSkyAnnot.exe", "ttskyannot-cli.exe")) { $targets += (Join-Path $Dist $name) }
+foreach ($x in $Extra) { $targets += $x }
+foreach ($exe in $targets) {
+    $name = Split-Path $exe -Leaf
     if (-not (Test-Path $exe)) { Write-Warning "missing $exe"; continue }
     & $signtool sign /sha1 $cert.Thumbprint /fd SHA256 /d "TTSkyAnnot" $exe | Out-Null
     if ($LASTEXITCODE -ne 0) {
