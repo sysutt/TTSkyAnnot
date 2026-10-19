@@ -83,31 +83,51 @@ def render(display_rgb, shapes, named_rows, out_path, max_edge=4000, quality=92,
         anchors = style.label_anchors(e, w, h, polys) if e.get("label") else []
         if anchors:
             gap = 6 * lw + 3 * SS if e.get("kind") == "point" else 3 * lw
-            labels.append(([(x * ks, y * ks, u) for x, y, u in anchors], e["label"], col, font, gap))
+            ins = style.inside_anchor(polys)
+            if ins is not None:
+                ins = (ins[0] * ks, ins[1] * ks, ins[2] * ks, ins[3] * ks)
+            labels.append(([(x * ks, y * ks, u) for x, y, u in anchors], e["label"], col, font, gap, ins))
     star = style.rgb(style.STAR_COLOR) + (255,)
     for r in named_rows or []:
         x, y = r.x * ks, r.y * ks
         rad = 9 * lw
         dr.ellipse([x - rad, y - rad, x + rad, y + rad], outline=star, width=lw)
         name = r.name + (" %s" % r.extra.get("common") if r.extra.get("common") else "")
-        labels.append(([(x, y, None)], name, star, sfont, rad + 3 * SS))
-    # greedy placement: outside each outline (or around a point), inside the frame, clear of labels already
-    # placed and preferably on a dark background
+        labels.append(([(x, y, None)], name, star, sfont, rad + 3 * SS, None))
+    # greedy placement: inside a big object's own shape, otherwise outside an outline (or around a point),
+    # inside the frame, clear of labels already placed and preferably on a dark background
     placed = list(grid_boxes)
     bright = style.Brightness(np.asarray(im.convert("L"), np.float32) / 255.0, 1.0 / SS)
     # Messier objects choose first, then the other objects, then star names
     labels.sort(key=lambda lb: (lb[3] is sfont, not (lb[1][:1] == "M" and lb[1][1:2].isdigit())))
-    for anchors, text, col, f, gap in labels:
-        bw, bh = dr.textbbox((0, 0), text, font=f)[2:]
-        boxes = []
-        for x, y, outward in anchors:
-            for ox, oy in style.label_offsets(outward, bw, bh, gap):
-                bx = min(max(x + ox, 2 * SS), OW - bw - 2 * SS)
-                by = min(max(y + oy, 2 * SS), OH - bh - 2 * SS)
-                boxes.append((bx, by, bx + bw, by + bh))
-        best = style.choose_box(boxes, placed, bright)
+    LP = max(1, int(round(3 * SS)))                # padding around the text: the chip the viewer draws too
+    for anchors, text, col, f, gap, inside in labels:
+        tw, th = dr.textbbox((0, 0), text, font=f)[2:]
+        bw, bh = tw + 2 * LP, th + 2 * LP
+        best = None
+        if inside is not None:
+            cx, cy, iw, ih = inside
+            if bw <= 0.6 * iw and bh <= 0.6 * ih:
+                bx = min(max(cx - bw / 2, 2 * SS), OW - bw - 2 * SS)
+                by = min(max(cy - bh / 2, 2 * SS), OH - bh - 2 * SS)
+                box = (bx, by, bx + bw, by + bh)
+                if style.choose_box([box], placed, None, pad=2.0 * SS, may_skip=True) is not None \
+                        and bright(box) < 0.55:
+                    best = box
+        if best is None:
+            boxes = []
+            for x, y, outward in anchors:
+                for ox, oy in style.label_offsets(outward, bw, bh, gap, rings=4, step=4 * lw):
+                    bx = min(max(x + ox, 2 * SS), OW - bw - 2 * SS)
+                    by = min(max(y + oy, 2 * SS), OH - bh - 2 * SS)
+                    boxes.append((bx, by, bx + bw, by + bh))
+            best = style.choose_box(boxes, placed, bright, pad=2.0 * SS, may_skip=True)
+        if best is None:
+            continue                     # crowded patch: better one name missing than two on top of each other
         placed.append(best)
-        dr.text((best[0], best[1]), text, fill=col, font=f)
+        dr.rounded_rectangle(best, radius=3 * SS, fill=(2, 4, 10, 168),
+                             outline=col[:3] + (200,), width=max(1, int(round(SS))))
+        dr.text((best[0] + LP, best[1] + LP), text, fill=col, font=f)
     ov = ov.resize((W2, H2), Image.LANCZOS)
     im = Image.alpha_composite(im.convert("RGBA"), ov).convert("RGB")
     ext = os.path.splitext(out_path)[1].lower()

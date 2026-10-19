@@ -11,17 +11,23 @@ MIRRORS = ("https://vizier.cds.unistra.fr/viz-bin/asu-tsv",
            "http://vizier.china-vo.org/viz-bin/asu-tsv",          # these two refuse TLS from some networks
            "http://vizier.nao.ac.jp/viz-bin/asu-tsv")
 
+# One table for the astrometric catalogues a run can annotate from, in the order their blocks appear in the
+# .objects.txt. "block" is that block's name line — readers, PixInsight's included, identify a block by
+# exactly that line — and "label" is what the interface shows. The bundled NamedStars catalogue is not part
+# of this: it needs no query.
 CATALOGS = {
-    "hip": {"source": "I/239/hip_main",
+    "hip": {"block": "Hipparcos", "label": "Hipparcos", "source": "I/239/hip_main",
             "out": ["HIP", "RAICRS", "DEICRS", "Vmag", "BTmag", "VTmag", "B-V", "V-I", "SpType", "Plx", "pmRA", "pmDE"],
             "sort": "HIP"},
-    "tyc": {"source": "I/259/tyc2",
+    "tyc": {"block": "TYCHO-2", "label": "Tycho-2", "source": "I/259/tyc2",
             "out": ["TYC1", "TYC2", "TYC3", "RAmdeg", "DEmdeg", "BTmag", "VTmag", "HIP"],
             "sort": None},
-    "gaia": {"source": "I/355/gaiadr3",
+    "gaia": {"block": "Gaia DR3", "label": "Gaia DR3", "source": "I/355/gaiadr3",
              "out": ["Source", "RA_ICRS", "DE_ICRS", "Gmag", "BPmag", "RPmag", "Plx", "pmRA", "pmDE"],
              "sort": "Gmag"},
 }
+HIP, TYC, GAIA = "hip", "tyc", "gaia"
+HIP_BLOCK, TYC_BLOCK, GAIA_BLOCK = (CATALOGS[k]["block"] for k in (HIP, TYC, GAIA))
 
 
 def cache_dir() -> str:

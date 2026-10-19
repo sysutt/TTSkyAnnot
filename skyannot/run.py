@@ -10,17 +10,28 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from . import annotate, grid, imageio, refine, render, shapes, solve, starfind, vizier, wcsio
+from . import annotate, grid, imageio, refine, render, shapes, starfind, vizier, wcsio
+# the solver module is bound as `solver`: this file also defines a public function called solve(), and the two
+# names collided — inside solve() the name referred to the function, so every solver lookup died with an
+# AttributeError that the loop recorded as "ttastro/nova failed" and quietly moved on from
+from . import solve as solver
 
 
 @dataclass
 class Options:
     target: str = ""                 # optional hint: object name, e.g. "M31"
+    target_radec: tuple = ()         # its catalogued position, when the user picked one from the database
     solvers: tuple = ("ttastro", "astap", "nova")
     astap_path: str = ""
     nova_key: str = ""
     gaia_mag: float = 16.0
+    debayer: bool = True             # interpolate a one-shot colour mosaic before solving or annotating
+    bayer_pattern: str = "auto"      # "auto" = the header's BAYERPAT, else one of debayer.PATTERNS
+    use_existing: bool = True        # reuse a solution the frame's own header already carries
+    dso_cats: tuple = ()             # deep-sky catalogues to annotate, in precedence order
+                                     # (empty = the bundled local ones, see catalogue.LOCAL)
     gaia_max_rows: int = 200000      # brightest-first cap for very wide fields (the text keeps parallaxes)
+    cats: tuple = ("hip", "tyc", "gaia")   # star catalogues to annotate from (vizier.CATALOGS keys)
     write_txt: bool = True
     write_preview: bool = True
     write_outlines: bool = True
@@ -45,6 +56,8 @@ class Result:
     named: list = field(default_factory=list)
     grid: list = field(default_factory=list)
     notes: list = field(default_factory=list)
+    blocks: list = field(default_factory=list)   # catalogue blocks: what the text file is written from
+    saved: bool = False                          # the outputs were written to disk
 
 
 def _epoch(date_text: str | None, path: str) -> float:
@@ -81,17 +94,160 @@ def local_overlay(img, wcs):
 
 
 def process(path: str, opt: Options, log=print, progress=lambda p, msg: None) -> Result:
-    res = Result(image=path)
+    """Solve, annotate and write, in one go: what the console entry point uses."""
+    img, res, disp = solve(path, opt, log=log, progress=progress)
+    if res.ok:
+        progress(0.80, "write")
+        write_outputs(img, res, opt, disp, log=log)
+    return res
+
+
+def output_paths(path: str, opt: Options) -> list:
+    """The files a save would write for this image, in the order they are produced. Empty when every output
+    is switched off. Used to tell the user exactly what is about to land in the folder."""
+    out_dir = opt.out_dir or os.path.dirname(os.path.abspath(path))
+    stem = os.path.join(out_dir, os.path.splitext(os.path.basename(path))[0])
+    out = [stem + ext for on, ext in ((opt.write_txt, ".objects.txt"),
+                                      (opt.write_outlines, ".outlines.json"),
+                                      (opt.write_preview, ".annotated.jpg")) if on]
+    if opt.write_wcs:
+        # a format with no header of its own gets a sidecar; everything else is written into the file itself
+        out.append(stem + ".wcs" if imageio.needs_sidecar(path) else path)
+    return out
+
+
+def write_outputs(img, res: Result, opt: Options, display_rgb=None, log=print) -> dict:
+    """Write everything the options ask for. Separate from process() so the caller can ask the user first:
+    nothing is written anywhere until this is called."""
+    path = res.image
+    out_dir = opt.out_dir or os.path.dirname(os.path.abspath(path))
+    os.makedirs(out_dir, exist_ok=True)
+    stem = os.path.join(out_dir, os.path.splitext(os.path.basename(path))[0])
+    if opt.write_txt:
+        p = stem + ".objects.txt"
+        with open(p, "w", encoding="utf-8", newline="\n") as f:
+            f.write(annotate.objects_text(res.blocks))
+        res.outputs["txt"] = p
+    if opt.write_outlines:
+        p = stem + ".outlines.json"
+        doc = {"image": os.path.basename(path), "width": img.width, "height": img.height,
+               "pixel_convention": "PixInsight: centre of the first pixel is (0.5, 0.5), y grows downwards",
+               "solution": {k: v for k, v in res.stats.items() if not isinstance(v, dict)},
+               "objects": res.shapes}
+        with open(p, "w", encoding="utf-8") as f:
+            json.dump(doc, f, ensure_ascii=False, indent=1)
+        res.outputs["outlines"] = p
+    if opt.write_preview:
+        p = stem + ".annotated.jpg"
+        render.render(display_rgb if display_rgb is not None else imageio.display_stretch(img, opt.stretch),
+                      res.shapes, res.named if opt.named else None, p,
+                      grid_lines=res.grid if opt.grid else None, categories=set(opt.categories),
+                      shape_style=opt.shape_style)
+        res.outputs["preview"] = p
+    if opt.write_wcs:
+        try:
+            p, how = wcsio.write_back(img, res.wcs, "%s + Gaia DR3 refinement" % res.stats.get("solver", ""),
+                                      opt.out_dir)
+        except Exception as e:
+            # writing the header is the one output that touches the user's own file: a failure here must be
+            # reported, never taken for a crash (a broken solution, a read-only file, a locked one, ...)
+            log("  could not write the solution back: %s: %s" % (type(e).__name__, e))
+        else:
+            res.outputs["wcs"] = p
+            log("  solution written back: " + how)
+    res.saved = True
+    return res.outputs
+
+
+def _existing_check(w0, det, width, height, log=print):
+    """(array of distances in px, number within 5 px) for a header solution, or None.
+
+    Bright catalogued stars are projected through the header solution and each one's nearest detection is
+    measured. A solution that is wrong cannot fake this: no catalogue star lands on a detection. The count of
+    close ones is reported as well as the distances, because a wide field may hold only one or two bright
+    stars to judge by — see _trusts_existing for how few is enough.
+    """
+    try:
+        from scipy.spatial import cKDTree
+        from . import catalogs
+        stars = [d for d in catalogs.named_stars() if getattr(d, "mag", None) is not None and d.mag <= 6.5]
+        if len(stars) < 4:
+            return None
+        ra0, de0, rad, _area = annotate.field_geometry(w0, width, height)
+        ra = np.array([d.ra for d in stars])
+        de = np.array([d.dec for d in stars])
+        cosd = (np.sin(np.radians(de0)) * np.sin(np.radians(de)) +
+                np.cos(np.radians(de0)) * np.cos(np.radians(de)) *
+                np.cos(np.radians(ra) - np.radians(ra0)))
+        near = cosd > np.cos(np.radians(min(2.0 * rad, 80.0)))
+        if near.sum() < 1:
+            return None
+        # quiet=True: the inverse of a SIP solution does not converge for points far outside the frame, and
+        # those come back as NaN rather than raising — the same treatment Projector.xy uses
+        px, py = w0.all_world2pix(ra[near], de[near], 0, quiet=True)
+        good = np.isfinite(px) & np.isfinite(py)
+        cat = np.column_stack([px[good], py[good]])
+        inside = ((cat[:, 0] >= 0) & (cat[:, 0] <= width) & (cat[:, 1] >= 0) & (cat[:, 1] <= height))
+        cat = cat[inside]
+        if len(cat) < 1:
+            return None
+        d, _j = cKDTree(det).query(cat)
+        d = d[np.isfinite(d)]
+        if d.size < 1:
+            return None
+        return d, int((d <= 5.0).sum())
+    except Exception as e:                     # a check that cannot run must not stop the solve
+        log("  (could not check the header solution: %s)" % e)
+        return None
+
+
+def _trusts_existing(check, width, height) -> bool:
+    """Whether a header solution is good enough to use instead of solving.
+
+    Two ways to qualify, because a wide field can hold very few bright stars:
+
+    * at least three stars lining up within a tolerance scaled to the frame — a real consensus;
+    * or a single star landing under a pixel. That is not a coincidence: the chance of a wrong solution
+      putting a catalogue star within a pixel of the right detection is tiny, and on a 3.9-degree field there
+      may genuinely be only one star to test with.
+    """
+    if check is None:
+        return False
+    d, close = check
+    if close < 1:
+        return False
+    tol = max(2.0, 0.005 * max(width, height))
+    if close >= 3 and float(np.median(d[d <= 5.0])) <= tol:
+        return True
+    return float(np.min(d)) <= 1.0
+
+
+def solve(image_path: str, opt: Options, log=print, progress=lambda p, msg: None):
+    """Everything up to (but not including) writing: load, detect, solve, refine, project catalogues.
+    Returns (LoadedImage or None, Result, display-ready array or None) and touches no user file.
+
+    The solver result is kept in `w0`, never in a name that shadows the `solve` module imported above: a local
+    called `solve` here used to mask it, so the ASTAP branch died with an AttributeError that was recorded as
+    "astap failed" and silently skipped.
+    """
+    res = Result(image=image_path)
     t0 = time.time()
+    img = disp = None
     try:
         progress(0.02, "load")
-        img = imageio.load(path)
+        img = imageio.load(image_path, want_debayer=opt.debayer,
+                           pattern="" if opt.bayer_pattern == "auto" else opt.bayer_pattern)
         disp = imageio.display_stretch(img, opt.stretch)
         hint = imageio.hints(img)
         if opt.target:
             hint["target"] = opt.target.strip()
-        epoch = _epoch(hint.get("date"), path)
-        log("%s: %d x %d %s%s" % (os.path.basename(path), img.width, img.height, img.fmt.upper(),
+        if opt.target_radec:
+            # the position of the object the user picked wins over the header's pointing: a mount's own
+            # coordinates are the target it was sent to, not necessarily where the frame is centred, and the
+            # online solver searches around this hint
+            hint["ra"], hint["dec"] = float(opt.target_radec[0]), float(opt.target_radec[1])
+        epoch = _epoch(hint.get("date"), image_path)
+        log("%s: %d x %d %s%s" % (os.path.basename(image_path), img.width, img.height, img.fmt.upper(),
                                   ", linear data (auto-stretched)" if img.linear else ""))
         progress(0.08, "stars")
         st = starfind.find_stars(disp, max_stars=3000)
@@ -103,19 +259,51 @@ def process(path: str, opt: Options, log=print, progress=lambda p, msg: None) ->
         wcs = stats = None
         gaia_rows = gaia_capped = None
         errors = []
+        # A frame that already carries an astrometric solution — the ASIAIR, NINA and PixInsight all write one
+        # into the header — does not need solving again. The solution is checked against the stars actually in
+        # the picture before it is trusted, because a stale or wrong header solution is worse than none.
+        if opt.use_existing:
+            progress(0.15, "existing")
+            w0 = wcsio.read_existing(img)
+            if w0 is None:
+                log("  no solution in the header to reuse")
+            else:
+                check = _existing_check(w0, det, img.width, img.height, log=log)
+                if check is None:
+                    log("  the header's solution could not be checked against the stars; solving instead")
+                elif _trusts_existing(check, img.width, img.height):
+                    d, close = check
+                    log("  using the solution already in the header (%d of the field's bright stars line up, "
+                        "closest %.2f px)" % (close, float(np.min(d))))
+                    stats = {"solver": "header", "existing_matched": close,
+                             "existing_closest_px": round(float(np.min(d)), 3)}
+                    wcs = w0
+                else:
+                    d, close = check
+                    log("  the header's solution does not match the stars (%d matched, closest %.1f px); "
+                        "solving instead" % (close, float(np.min(d))))
         for name in opt.solvers:
+            if wcs is not None:
+                break
             progress(0.15, "solve:" + name)
             try:
                 if name == "ttastro":
-                    w0, info = solve.solve_ttastro(st, img.width, img.height, hint, log=log)
+                    w0, info = solver.solve_ttastro(st, img.width, img.height, hint, log=log)
                 elif name == "astap":
-                    if not solve.find_astap(opt.astap_path):
+                    found = solver.find_astap(opt.astap_path)
+                    if not found:
+                        # say so rather than skipping in silence: a path set in the settings that cannot be
+                        # used is the most common reason the offline solver never runs
+                        tried = solver.astap_candidates(opt.astap_path)
+                        log("  astap not found - looked at: %s" % ", ".join(tried or ["(no path configured)"]))
+                        errors.append("astap: not found, looked at %s" % ", ".join(tried) if tried
+                                      else "astap: no path configured and none installed")
                         continue
-                    w0, info = solve.solve_astap(disp, hint, exe=opt.astap_path or None, log=log)
+                    w0, info = solver.solve_astap(disp, hint, exe=found, log=log)
                 elif name == "nova":
                     if not opt.nova_key:
                         continue
-                    w0, info = solve.solve_nova(disp, opt.nova_key, log=log)
+                    w0, info = solver.solve_nova(disp, opt.nova_key, log=log)
                 else:
                     continue
                 log("  solved by %s" % name)
@@ -136,9 +324,9 @@ def process(path: str, opt: Options, log=print, progress=lambda p, msg: None) ->
 
         progress(0.60, "catalogues")
         P = annotate.Projector(wcs, img.width, img.height)
-        blocks = annotate.dso_blocks(P)
+        blocks = annotate.dso_blocks(P, cats=opt.dso_cats)
         sblocks, notes = annotate.star_blocks(P, ra0, de0, rad, area, epoch, opt.gaia_mag,
-                                              gaia_rows=gaia_rows, log=log)
+                                              gaia_rows=gaia_rows, log=log, cats=opt.cats)
         if gaia_capped is not None:
             notes.append("Gaia DR3 limited to the brightest %d stars of this wide field (down to G %.2f)"
                          % (opt.gaia_max_rows, gaia_capped))
@@ -147,43 +335,16 @@ def process(path: str, opt: Options, log=print, progress=lambda p, msg: None) ->
         for n in notes:
             log("  note: " + n)
         res.named = next((b.rows for b in blocks if b.name == "NamedStars"), [])
+        res.blocks = blocks
         res.shapes = shapes.collect(P)
         res.grid = grid.compute(wcs, img.width, img.height)
         stats["objects"] = {b.name: len(b.rows) for b in blocks}
         log("  " + ", ".join("%s %d" % kv for kv in stats["objects"].items()))
 
-        out_dir = opt.out_dir or os.path.dirname(os.path.abspath(path))
-        os.makedirs(out_dir, exist_ok=True)
-        stem = os.path.join(out_dir, os.path.splitext(os.path.basename(path))[0])
-        progress(0.80, "write")
-        if opt.write_txt:
-            p = stem + ".objects.txt"
-            with open(p, "w", encoding="utf-8", newline="\n") as f:
-                f.write(annotate.objects_text(blocks))
-            res.outputs["txt"] = p
-        if opt.write_outlines:
-            p = stem + ".outlines.json"
-            doc = {"image": os.path.basename(path), "width": img.width, "height": img.height,
-                   "pixel_convention": "PixInsight: centre of the first pixel is (0.5, 0.5), y grows downwards",
-                   "solution": {k: v for k, v in stats.items() if not isinstance(v, dict)},
-                   "objects": res.shapes}
-            with open(p, "w", encoding="utf-8") as f:
-                json.dump(doc, f, ensure_ascii=False, indent=1)
-            res.outputs["outlines"] = p
-        if opt.write_preview:
-            p = stem + ".annotated.jpg"
-            render.render(disp, res.shapes, res.named if opt.named else None, p,
-                          grid_lines=res.grid if opt.grid else None, categories=set(opt.categories),
-                          shape_style=opt.shape_style)
-            res.outputs["preview"] = p
-        if opt.write_wcs:
-            p, how = wcsio.write_back(img, wcs, "%s + Gaia DR3 refinement" % stats.get("solver", ""), opt.out_dir)
-            res.outputs["wcs"] = p
-            log("  solution written back: " + how)
         res.ok = True
         log("  done in %.0f s" % (time.time() - t0))
         progress(1.0, "done")
     except Exception as e:
         res.error = str(e)
         log("  ERROR: %s" % e)
-    return res
+    return img, res, disp

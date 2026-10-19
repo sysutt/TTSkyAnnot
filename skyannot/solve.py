@@ -68,12 +68,42 @@ def solve_ttastro(stars, width, height, hint=None, log=print, timeout=60.0, max_
 
 
 # ───────────────────────────── ASTAP (offline) ─────────────────────────────
-def find_astap(configured: str | None = None) -> str | None:
+def astap_candidates(configured: str | None = None) -> list:
+    """Every path ASTAP is looked for, in order, so a miss can be reported honestly."""
     cands = [configured] if configured else []
     cands += [shutil.which("astap"), shutil.which("astap_cli"),
               r"C:\Program Files\astap\astap.exe", r"C:\Program Files\astap\astap_cli.exe",
               r"C:\Program Files (x86)\astap\astap.exe"]
-    return next((c for c in cands if c and os.path.isfile(c)), None)
+    return [c for c in cands if c]
+
+
+def find_astap(configured: str | None = None) -> str | None:
+    return next((c for c in astap_candidates(configured) if os.path.isfile(c)), None)
+
+
+def astap_db_hint(exe: str, look=None) -> str:
+    """A note about ASTAP's star database when the one installed cannot match the field, else "".
+
+    ASTAP's star databases are built for a range of field sizes, and they are separate downloads. A telescope
+    long enough to give a small field (a 2170 mm SCT gives 0.28 x 0.15 deg) needs H17 or H18; the wide-field
+    D-bases start at 0.6 deg and simply cannot match such a field, which ASTAP reports only as "no solution".
+    Detecting it here turns an unexplained failure into something the user can act on.
+    """
+    try:
+        names = look(os.path.dirname(os.path.abspath(exe))) if look else os.listdir(
+            os.path.dirname(os.path.abspath(exe)))
+    except OSError:
+        return ""
+    db = {n.split("_")[0].lower() for n in names if "_" in n}
+    if db & {"h17", "h18"}:
+        return ""
+    wide = sorted(d for d in db if d and d[0] == "d" and d[1:].isdigit())
+    if not db:
+        return ("ASTAP has no star database next to its program file, so it cannot solve anything. "
+                "Download one (H17 or H18 for small fields) from the ASTAP site.")
+    return ("ASTAP only has the %s star database(s), which cover fields from about 0.6 degrees up. For a "
+            "field this small it needs H17 or H18 as well - a separate download from the ASTAP site."
+            % "/".join(wide or sorted(db)))
 
 
 def solve_astap(display_rgb, hint=None, exe=None, log=print, timeout=180):
@@ -82,7 +112,7 @@ def solve_astap(display_rgb, hint=None, exe=None, log=print, timeout=180):
     from astropy.wcs import WCS
     exe = find_astap(exe)
     if not exe:
-        raise SolveError("ASTAP not installed")
+        raise SolveError("ASTAP not found")
     lum = np.asarray(display_rgb, np.float32).mean(axis=2)
     tmpd = tempfile.mkdtemp(prefix="skyannot_astap_")
     try:
@@ -97,11 +127,16 @@ def solve_astap(display_rgb, hint=None, exe=None, log=print, timeout=180):
             args += ["-fov", "%.4f" % fov]
         else:
             args += ["-fov", "0"]
-        subprocess.run(args, capture_output=True, timeout=timeout,
-                       creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        proc = subprocess.run(args, capture_output=True, timeout=timeout,
+                              creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         wf = os.path.join(tmpd, "frame.wcs")
         if not os.path.exists(wf):
-            raise SolveError("ASTAP could not solve the image")
+            # ASTAP keeps its verdict in an INI beside the FITS; its own text and that verdict say far more
+            # than "could not solve", and the database is the usual reason on a small field
+            said = b" ".join(x for x in (proc.stdout, proc.stderr) if x).decode("utf-8", "replace").strip()
+            note = astap_db_hint(exe)
+            detail = " ".join(x for x in (said[:300], note) if x)
+            raise SolveError("ASTAP did not find a solution" + (": " + detail if detail else ""))
         try:
             hdr = fits.getheader(wf)                     # ASTAP writes a header-only FITS file
         except OSError:
