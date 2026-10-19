@@ -4,3 +4,14 @@ build/
 dist/
 *.spec.bak
 .venv/
+.dsh-acl-reports/
+.skyannot_test/
+.skyannot_shots/
+# the 45 MB HyperLEDA download tools/leda_pa.py caches; data/openngc/posang.csv is the generated result and IS
+# committed, so the tool only needs the network to be re-run
+.leda_cache/
+dist_new/
+build_new/
+updates/
+*.log
+packaging/zone-file-backup.txt

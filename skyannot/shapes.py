@@ -24,11 +24,74 @@ def _ellipse_world(ra, dec, maj_arcmin, min_arcmin, pa_deg, n=72):
     return ra_p, dec_p
 
 
+# An outline is trustworthy as a direction only when it is actually elongated. Below this ratio its "long axis"
+# is a property of the vertex noise, not of the object, so the shape stays a circle.
+MIN_AXIS_ELONGATION = 1.30
+
+
+def _outline_axis(pts):
+    """(position angle north through east, elongation) of an outline's long axis.
+
+    OpenNGC leaves `PosAng` empty for 2586 entries — every nebula in the sample, NGC1499 among them. Drawing
+    those as an ellipse at 0 degrees produces a vertical oval, which asserts a direction the catalogue never
+    gave. When an outline is available its own long axis stands in, and its elongation says whether that axis
+    means anything.
+    """
+    a = np.asarray(pts, np.float64)
+    if a.ndim != 2 or a.shape[0] < 3:
+        return None, 0.0
+    ra, de = a[:, 0], a[:, 1]
+    ok = np.isfinite(ra) & np.isfinite(de)
+    if int(ok.sum()) < 3:
+        return None, 0.0
+    ra, de = ra[ok], de[ok]
+    east = (ra - ra.mean()) * math.cos(math.radians(de.mean()))
+    north = de - de.mean()
+    cee = float(np.dot(east, east))
+    cnn = float(np.dot(north, north))
+    cen = float(np.dot(east, north))
+    tr, det = cee + cnn, cee * cnn - cen * cen
+    disc = max(0.0, tr * tr / 4.0 - det)
+    l1 = tr / 2.0 + math.sqrt(disc)
+    l2 = max(1e-30, tr / 2.0 - math.sqrt(disc))
+    if not np.isfinite(l1) or l1 <= 0:
+        return None, 0.0
+    # the major axis, measured from north towards east
+    pa = math.degrees(0.5 * math.atan2(2.0 * cen, cnn - cee)) % 180.0
+    return float(pa), float(math.sqrt(l1 / l2))
+
+
+def _axis_for(d, outlined_pts) -> tuple:
+    """(position angle or None, major arcmin, minor arcmin) for a catalogue-sized shape.
+
+    The catalogue's own angle wins. Failing that, the outline's long axis is used when the outline is elongated
+    enough for the direction to mean anything, with the minor axis taken from the same outline. When neither
+    exists the angle comes back as None, and the callers draw a circle: an object with no known direction must
+    not be drawn as if it had one.
+    """
+    maj = d.maj or 0.0
+    if not maj:
+        return None, 0.0, 0.0
+    minor = d.minr or maj
+    if getattr(d, "pa", None) is not None:
+        return float(d.pa), maj, minor
+    if outlined_pts:
+        pa, elong = _outline_axis(outlined_pts)
+        if pa is not None and elong >= MIN_AXIS_ELONGATION:
+            return pa, maj, max(maj / elong, 1e-6)
+    return None, maj, maj
+
+
 CATEGORIES = ("galaxy", "nebula", "cluster", "dark", "other")
 
 
-def category(entry) -> str:
-    """Which annotation group an object belongs to (the user switches groups on and off)."""
+def object_type(entry) -> str:
+    """The kind of object this is — galaxy, nebula, cluster, dark nebula or other.
+
+    This decides the overlay colour only. Nebulae are mostly red or pink in pictures so their outlines are
+    cyan, galaxies are yellow-white so theirs are rose, and clusters sit on star fields so theirs are gold;
+    see style.py. The type is a property of the object itself, not of the catalogue that lists it.
+    """
     t = entry.get("type") or ""
     name = entry.get("name") or ""
     if entry.get("catalog") == "Sharpless":
@@ -37,11 +100,21 @@ def category(entry) -> str:
         return "galaxy"
     if t in ("OCl", "GCl", "*Ass", "Cl+N"):
         return "cluster"
-    if t == "DrkN" or name.startswith(("B", "LDN")):
+    if t == "DrkN" or name.startswith(("B", "LDN", "LDN")):
         return "dark"
-    if t in ("PN", "HII", "EmN", "Neb", "RfN", "SNR") or entry.get("kind") == "outline":
-        return "nebula"
+    if t in ("PN", "HII", "EmN", "Neb", "RfN", "SNR", "BN") or entry.get("kind") == "outline":
+        return "nebula"                    # BN: Lynds' bright nebulae, which the online catalogue uses
     return "other"                         # stars, double stars, novae and other NGC/IC entries
+
+
+def category(entry) -> str:
+    """Which annotation group an object is listed under: the catalogue its designation belongs to.
+
+    The groups are catalogues (Messier, NGC, IC, Sharpless, ...), so this is the key that switches them on and
+    off. `object_type` above remains what colours the overlay.
+    """
+    from . import catalogue
+    return catalogue.catalogue_of(entry) or "other"
 
 
 def collect(P, include_others=True, min_size_px=6.0):
@@ -52,14 +125,22 @@ def collect(P, include_others=True, min_size_px=6.0):
     W, H = P.w, P.h
     diag = math.hypot(W, H)
     outlined = set()
+    outline_pts: dict = {}          # name -> sky vertices, so a missing PosAng can be taken from the outline
     m2n = {o.messier: o.name for o in catalogs.messier() if o.ngcic}
     groups: dict = {}
     for name, src, pts in catalogs.outlines():
         ra = np.array([p[0] for p in pts])
         dec = np.array([p[1] for p in pts])
         x, y = P.xy(ra, dec)
-        if not np.all(np.isfinite(x)):
+        # The projector returns NaN for points beyond about twice the field radius, because a SIP solution is
+        # only trustworthy near the frame. A big nebula's outline normally runs well outside the frame — all
+        # of NGC7000 does — so the vertices that cannot be projected are dropped and what is left is drawn.
+        # Rejecting the whole outline over one such vertex would throw away the only true shape available and
+        # fall back to the catalogue ellipse, which has no position angle for exactly these large nebulae.
+        good = np.isfinite(x) & np.isfinite(y)
+        if good.sum() < 3:                            # nothing of it is near enough to draw
             continue
+        x, y = x[good], y[good]
         if x.max() < 0 or y.max() < 0 or x.min() > W or y.min() > H:
             continue
         if max(x.max() - x.min(), y.max() - y.min()) > 20 * diag:     # wrapped around the projection
@@ -69,6 +150,7 @@ def collect(P, include_others=True, min_size_px=6.0):
                                            "kind": "outline", "source": src, "polygons": [],
                                            "ra": float(np.mean(ra)), "dec": float(np.mean(dec))})
         g["polygons"].append([[round(float(a), 2), round(float(b), 2)] for a, b in zip(x, y)])
+        outline_pts.setdefault(key, pts)
     for g in groups.values():
         outlined.add(g["name"])
         out.append(g)
@@ -94,7 +176,8 @@ def collect(P, include_others=True, min_size_px=6.0):
         if d.name in outlined:
             circle = None
             if d.maj and 2 * r_px >= min_size_px:          # catalogue size, for the "circles" display style
-                er, ed = _ellipse_world(d.ra, d.dec, d.maj, d.minr, d.pa)
+                pa, maj, minor = _axis_for(d, outline_pts.get(d.name))
+                er, ed = _ellipse_world(d.ra, d.dec, maj, minor, pa)
                 x, y = P.xy(er, ed)
                 circle = [[[round(float(a), 2), round(float(b), 2)] for a, b in zip(x, y)]]
             for o in out:
@@ -105,9 +188,13 @@ def collect(P, include_others=True, min_size_px=6.0):
                         o["circle"] = circle
             continue
         if d.maj and 2 * r_px >= min_size_px:
-            er, ed = _ellipse_world(d.ra, d.dec, d.maj, d.minr, d.pa)
+            pa, maj, minor = _axis_for(d, None)
+            er, ed = _ellipse_world(d.ra, d.dec, maj, minor, pa)
             x, y = P.xy(er, ed)
-            entry.update(kind="circle" if cat == "Sharpless" else "ellipse",
+            # a Sharpless entry is a diameter, not a pair of axes, so it stays a circle; for OpenNGC the shape
+            # is an ellipse only when a direction is actually known
+            round_object = cat == "Sharpless" or pa is None
+            entry.update(kind="circle" if round_object else "ellipse",
                          source="Sharpless" if cat == "Sharpless" else "OpenNGC",
                          polygons=[[[round(float(a), 2), round(float(b), 2)] for a, b in zip(x, y)]])
         else:
@@ -115,7 +202,8 @@ def collect(P, include_others=True, min_size_px=6.0):
         out.append(entry)
     for o in out:
         o.setdefault("catalog", "Outline")
-        o["category"] = category(o)
+        o["category"] = category(o)         # the catalogue it is listed under (the switchable group)
+        o["type_group"] = object_type(o)    # what it is, which is what colours it
         if "x" not in o and o["polygons"]:
             xs = [p[0] for poly in o["polygons"] for p in poly]
             ys = [p[1] for poly in o["polygons"] for p in poly]

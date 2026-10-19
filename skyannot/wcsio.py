@@ -15,6 +15,8 @@ import os
 import re
 import tempfile
 
+from . import imageio
+
 _WCS_KEY = re.compile(r"^(CTYPE\d|CRVAL\d|CRPIX\d|CDELT\d|CROTA\d|CUNIT\d|CD\d_\d|PC\d_\d|PV\d_\d+|"
                       r"A_\w+|B_\w+|AP_\w+|BP_\w+|LONPOLE|LATPOLE|WCSAXES|RADESYS|EQUINOX|MJDREF|DATEREF|PLTSOLVD)$")
 
@@ -133,6 +135,11 @@ def read_existing(img):
         return w if w.has_celestial else None
     except Exception:
         return None
+
+
+def needs_sidecar(path: str) -> bool:
+    """Formats with no header of their own (JPEG, PNG, TIFF) get a sidecar .wcs instead of being modified."""
+    return imageio.needs_sidecar(path)
 
 
 def write_back(img, wcs, note="", out_dir=""):

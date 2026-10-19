@@ -20,7 +20,11 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from . import catalogs, refine, vizier
+from . import catalogs, catalogue, refine, vizier
+
+# the exact name lines the text format uses for the queried star catalogues (catalogs.py holds the bundled
+# ones); readers identify a block by its name line, and vizier.CATALOGS is the one table behind all of this
+HIP_BLOCK, TYC_BLOCK, GAIA_BLOCK = vizier.HIP_BLOCK, vizier.TYC_BLOCK, vizier.GAIA_BLOCK
 
 
 @dataclass
@@ -99,39 +103,46 @@ def field_geometry(wcs, width, height):
 
 
 # ───────────────────────────── catalogue blocks ─────────────────────────────
-def dso_blocks(P: Projector):
-    """Messier, NGC-IC and Sharpless blocks (objects whose centre is in the frame)."""
-    blocks = []
-    ms = catalogs.messier()
-    x, y = P.xy([d.ra for d in ms], [d.dec for d in ms])
-    rows = [Row(d.messier, d.ra, d.dec, x[i], y[i],
-                [_fmt(d.mag, 2), _fmt(d.maj / 60.0 if d.maj else None, 2), d.common, d.ngcic,
-                 d.pgc[0] if d.pgc else ""], d.mag, {"dso": d})
-            for i, d in enumerate(ms) if P.inside(x[i], y[i])]
-    if rows:
-        blocks.append(Block("Messier", "Messier catalog (OpenNGC, %d objects)" % len(ms),
-                            ["Magnitude", "Diameter", "Common name", "NGC/IC", "PGC"], rows))
-    ng = catalogs.ngcic()
-    x, y = P.xy([d.ra for d in ng], [d.dec for d in ng])
-    idx = [i for i in range(len(ng)) if P.inside(x[i], y[i])]
+def _dso_rows(P, entries, catalogue_key):
+    """Rows for the entries that belong to one catalogue, in catalogue-number order."""
+    if not entries:
+        return []
+    x, y = P.xy([d.ra for d in entries], [d.dec for d in entries])
+    idx = [i for i in range(len(entries)) if P.inside(x[i], y[i])]
+    rows = []
+    for i in sorted(idx, key=lambda i: catalogue.sort_key(entries[i], catalogue_key)):
+        d = entries[i]
+        pgc = getattr(d, "pgc", None) or []
+        rows.append(Row(d.name, d.ra, d.dec, x[i], y[i],
+                        [_fmt(d.mag, 2), _fmt(d.maj / 60.0 if d.maj else None, 2), d.common,
+                         d.messier, pgc[0] if pgc else "", pgc[1] if len(pgc) > 1 else ""],
+                        d.mag, {"dso": d}))
+    return rows
 
-    def key(d):
-        m = catalogs._NGC_RE.match(d.name)
-        return (0 if m.group(1) == "NGC" else 1, int(m.group(2)), m.group(3)) if m else (2, 0, d.name)
-    rows = [Row(ng[i].name, ng[i].ra, ng[i].dec, x[i], y[i],
-                [_fmt(ng[i].mag, 2), _fmt(ng[i].maj / 60.0 if ng[i].maj else None, 2), ng[i].common,
-                 ng[i].pgc[0] if ng[i].pgc else "", ng[i].pgc[1] if len(ng[i].pgc) > 1 else "", ng[i].messier],
-                ng[i].mag, {"dso": ng[i]})
-            for i in sorted(idx, key=lambda i: key(ng[i]))]
-    if rows:
-        blocks.append(Block("NGC-IC", "NGC and IC catalogs (OpenNGC, %d objects)" % len(ng),
-                            ["Magnitude", "Diameter", "Common name", "PGC", "PGC2", "Messier"], rows))
-    sh = catalogs.sharpless()
-    x, y = P.xy([d.ra for d in sh], [d.dec for d in sh])
-    rows = [Row(d.name, d.ra, d.dec, x[i], y[i], [], None, {"dso": d})
-            for i, d in enumerate(sh) if P.inside(x[i], y[i])]
-    if rows:
-        blocks.append(Block("Sharpless", "Catalog of HII Regions - Sharpless (313 nebulae)", [], rows))
+
+def dso_blocks(P: Projector, cats=None):
+    """One block per enabled deep-sky catalogue (objects whose centre is in the frame).
+
+    Grouping follows the catalogue an object's designation puts it in, and each object is listed under exactly
+    one: the first enabled catalogue in precedence order that holds it. M31 is a Messier object and is not
+    listed again under NGC; NGC 7000 is an NGC object and is not listed again under Sharpless. `cats` is the
+    tuple of enabled catalogue keys (None = everything local), see catalogue.CATALOGUES.
+    """
+    on = tuple(cats) if cats else catalogue.LOCAL
+    # unique(): OpenNGC lists 107 objects in both messier() and ngcic(), and without this they would be counted
+    # twice and annotated twice
+    entries = catalogue.unique(list(catalogs.messier()) + list(catalogs.ngcic())
+                               + list(catalogs.sharpless()))
+    mine = catalogue.assign(entries, on)
+    blocks = []
+    for key in catalogue.KEYS:
+        if key not in on:
+            continue
+        sel = [e for e in entries if mine.get(catalogue.key_of(e)) == key]
+        rows = _dso_rows(P, sel, key)
+        if rows:
+            blocks.append(Block("dso:" + key, catalogue.NOTES[key],
+                                ["Magnitude", "Diameter", "Common name", "Messier", "PGC", "PGC2"], rows))
     return blocks
 
 
@@ -139,17 +150,32 @@ def _f(rows, k):
     return np.array([_num(r.get(k)) if r.get(k) not in (None, "") else np.nan for r in rows], float)
 
 
-def star_blocks(P: Projector, ra0, de0, rad, area, epoch, gaia_mag=16.0, gaia_rows=None, log=print):
-    """NamedStars, Hipparcos, Tycho-2 and Gaia DR3 blocks. Returns (blocks, notes)."""
+def star_blocks(P: Projector, ra0, de0, rad, area, epoch, gaia_mag=16.0, gaia_rows=None, log=print,
+                cats=None):
+    """The star blocks the user asked for. Returns (blocks, notes).
+
+    cats: which of vizier.CATALOGS to write ("hip", "tyc", "gaia"; None = all of them). A catalogue that is
+    not asked for is not even queried, so a run with only, say, Gaia selected does not wait for Tycho-2.
+    The reference stars for the refinement come from run.py, not from here, so the plate solution keeps its
+    accuracy whatever is switched off for the text.
+
+    NamedStars is always included: it is a bundled catalogue, not one of the three queried ones.
+    """
+    cats = tuple(vizier.CATALOGS) if cats is None else tuple(c for c in cats if c in vizier.CATALOGS)
     notes = []
     blocks = []
     hip = []
-    try:
-        hip = vizier.cone("hip", ra0, de0, rad, log=log)
-    except Exception as e:
-        notes.append("Hipparcos: %s" % e)
-    hra, hde = refine.propagate(_f(hip, "RAICRS"), _f(hip, "DEICRS"), _f(hip, "pmRA"), _f(hip, "pmDE"), 1991.25, 2000.0)
-    hra_e, hde_e = refine.propagate(_f(hip, "RAICRS"), _f(hip, "DEICRS"), _f(hip, "pmRA"), _f(hip, "pmDE"), 1991.25, epoch)
+    if "hip" in cats:
+        try:
+            hip = vizier.cone("hip", ra0, de0, rad, log=log)
+        except Exception as e:
+            notes.append("Hipparcos: %s" % e)
+    hra, hde = refine.propagate(_f(hip, "RAICRS"), _f(hip, "DEICRS"), _f(hip, "pmRA"), _f(hip, "pmDE"),
+                                1991.25, 2000.0)
+    # the epoch of a named star whose catalogue position is kept: the Hipparcos list is also what positions
+    # the named stars, so 2000.0 is the honest choice when Hipparcos is switched off
+    hra_e, hde_e = refine.propagate(_f(hip, "RAICRS"), _f(hip, "DEICRS"), _f(hip, "pmRA"), _f(hip, "pmDE"),
+                                    1991.25, epoch if "hip" in cats else 2000.0)
 
     # Named stars: Yale BSC designations + IAU names, positioned with Hipparcos where it matches
     ns = catalogs.named_stars()
@@ -191,15 +217,17 @@ def star_blocks(P: Projector, ra0, de0, rad, area, epoch, gaia_mag=16.0, gaia_ro
                              _fmt(_num(r["B-V"]), 3), _fmt(_num(r["V-I"]), 2), r["SpType"], _fmt(_num(r["Plx"]), 2)],
                             _num(r["Vmag"])))
         if rows:
-            blocks.append(Block("Hipparcos", "Hipparcos Main catalog (118,218 stars)",
+            blocks.append(Block(vizier.HIP_BLOCK, "Hipparcos Main catalog (118,218 stars)",
                                 ["Magnitude", "BT magnitude", "VT magnitude", "B-V color", "V-I index",
                                  "Spectral type", "Parallax"], rows))
 
-    try:
-        tyc = vizier.cone("tyc", ra0, de0, rad, log=log)
-    except Exception as e:
-        tyc = []
-        notes.append("Tycho-2: %s" % e)
+    tyc = []
+    if "tyc" in cats:
+        try:
+            tyc = vizier.cone("tyc", ra0, de0, rad, log=log)
+        except Exception as e:
+            tyc = []
+            notes.append("Tycho-2: %s" % e)
     if tyc:
         tra, tde = _f(tyc, "RAmdeg"), _f(tyc, "DEmdeg")
         x, y = P.xy(tra, tde)
@@ -221,13 +249,13 @@ def star_blocks(P: Projector, ra0, de0, rad, area, epoch, gaia_mag=16.0, gaia_ro
                              ("HIP" + hipno) if hipno else "", _fmt(v, 3), _fmt(b, 3), _fmt(bv, 3)], vt))
         rows.sort(key=lambda r: tuple(int(p) for p in r.name[3:].split("-")))
         if rows:
-            blocks.append(Block("TYCHO-2", "Tycho-2 catalog (2,539,913 stars)",
+            blocks.append(Block(vizier.TYC_BLOCK, "Tycho-2 catalog (2,539,913 stars)",
                                 ["Magnitude", "VTmag", "BTmag", "HIP", "Vmag", "Bmag", "B-V index"], rows))
 
     # PixInsight's annotation skips Gaia above 9 square degrees because its local catalogue is slow; here the
     # query is capped brightest-first instead (run.Options.gaia_max_rows), so wide fields keep their parallaxes.
-    g = gaia_rows
-    if g is None:
+    g = gaia_rows if "gaia" in cats else None
+    if "gaia" in cats and g is None:
         try:
             g = vizier.cone("gaia", ra0, de0, rad, mag_max=gaia_mag, log=log)
         except Exception as e:
@@ -249,7 +277,7 @@ def star_blocks(P: Projector, ra0, de0, rad, area, epoch, gaia_mag=16.0, gaia_ro
                              _fmt(_num(r["Plx"]), 4), ""], _num(r["Gmag"]), {"source_id": r["Source"]}))
         rows.sort(key=lambda r: r.mag if r.mag is not None else 99)
         if rows:
-            blocks.append(Block("Gaia DR3", "Gaia Data Release 3, VizieR I/355/gaiadr3 (Gaia Collaboration, "
+            blocks.append(Block(vizier.GAIA_BLOCK, "Gaia Data Release 3, VizieR I/355/gaiadr3 (Gaia Collaboration, "
                                 "2022), G <= %.1f" % gaia_mag,
                                 ["RPmag", "Gmag", "BPmag", "Parallax", "Flags"], rows))
     return blocks, notes

@@ -9,49 +9,426 @@ image.
 """
 from __future__ import annotations
 
+import math
 import os
+import re
+import shutil
+import subprocess
 import sys
+import tempfile
+import threading
 import traceback
+from dataclasses import replace
 
 import numpy as np
-from PyQt5.QtCore import QPointF, QRectF, Qt, QThread, QUrl, pyqtSignal
+from PyQt5.QtCore import (QEvent, QPointF, QProcess, QPropertyAnimation, QRectF, QSize, QStringListModel, Qt,
+                          QThread, QTimer, QUrl, pyqtProperty, pyqtSignal)
 from PyQt5.QtGui import (QBrush, QColor, QDesktopServices, QFont, QIcon, QImage, QKeySequence, QPainter,
-                         QPainterPath, QPalette, QPen, QPixmap)
-from PyQt5.QtWidgets import (QAbstractItemView, QAction, QActionGroup, QApplication, QCheckBox, QComboBox,
-                             QGridLayout,
-                             QDialog, QDialogButtonBox, QDockWidget, QDoubleSpinBox, QFileDialog, QFormLayout,
-                             QGraphicsEllipseItem, QGraphicsPathItem, QGraphicsPixmapItem,
-                             QGraphicsRectItem,
-                             QGraphicsScene, QGraphicsSimpleTextItem, QGraphicsView, QHBoxLayout, QHeaderView,
-                             QLabel, QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QMessageBox,
-                             QPlainTextEdit, QProgressBar, QPushButton, QTableWidget, QTableWidgetItem, QToolBar,
+                         QPainterPath, QPalette, QPen, QPixmap, QPolygonF)
+from PyQt5.QtWidgets import (QAbstractButton, QAbstractItemView, QAction, QApplication, QCheckBox, QComboBox,
+                             QCompleter,
+                             QDialog,
+                             QDialogButtonBox, QDockWidget, QDoubleSpinBox, QFileDialog, QFormLayout, QFrame,
+                             QGraphicsEllipseItem, QGraphicsPathItem, QGraphicsPixmapItem, QGraphicsRectItem,
+                             QGraphicsScene, QGraphicsSimpleTextItem, QGraphicsView, QGridLayout, QHBoxLayout,
+                             QHeaderView, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QMenu,
+                             QMessageBox, QPlainTextEdit, QProgressBar, QProgressDialog, QProxyStyle, QPushButton,
+                             QSizeGrip,
+                             QSizePolicy, QSpinBox, QStyle, QTableWidget, QTableWidgetItem, QToolBar, QToolButton,
                              QVBoxLayout, QWidget)
 
-from . import __version__, catalogs, config, imageio, run, style, wcsio
+from . import (__version__, catalogs, catalogue, config, debayer, fileop, histview, imageio, piopen, reveal,
+               run, style, tickwhale, updater, vizier, wcsio)
+from . import histogram as hist_mod
 from . import shapes as shapes_mod
 from .i18n import set_language, t
 
-ACCENT = "#55DDA0"
-# annotation groups the user can switch on and off: (key, label)
-GROUPS = (("galaxy", "星系"), ("nebula", "星云"), ("cluster", "星团"), ("dark", "暗星云"),
-          ("other", "其他 NGC/IC 条目"), ("named", "亮星名"), ("grid", "坐标网格"))
+ACCENT = "#68E098"
+
+# The palette follows the TTAstroRoom design tokens (see its UI spec, shared design language between the two
+# tools): one green accent and nothing else competing with it, a near-black blue-grey system background, two
+# greys for secondary text, hairline borders, small radii and a 4-px spacing scale. Surfaces are named by
+# role rather than by lightness, which is what keeps the two themes — and every widget — consistent.
+#
+# The picture sits on a canvas that frames it — the darkest tone in the dark set, a quiet grey in the light one,
+# so the chrome never outshines the image in either theme.
+THEMES = {
+    "dark": {
+        "canvas": "#0a0d11",                      # behind the picture: darker than the page, so it frames it
+        "shadow": "#0a0d11",                      # 3D shadow role for the parts Fusion still draws itself
+        "bg": "#0a131a",                          # system background
+        "surface": "#1e2224",                     # panels, bars, dialogs
+        "surface2": "#2a333a",                    # inputs, chips, list bodies
+        "surface3": "#1a232a",                    # inset containers
+        "stripe": "#405159",                      # section bars and label columns
+        "elev": "rgba(255,255,255,0.10)",         # a card laid on a dark page
+        "elev_soft": "rgba(255,255,255,0.05)",    # zebra stripe
+        "press": "rgba(255,255,255,0.20)",        # pressed / active overlay
+        "border": "rgba(255,255,255,0.08)",       # hairline
+        "border2": "rgba(255,255,255,0.14)",      # a step stronger, for inputs
+        "fg1": "#ffffff",                         # primary text
+        "fg2": "#bbc2ca",                         # secondary
+        "fg3": "#8a9399",                         # tertiary
+        "fg4": "#6b8eaa",                         # metadata, coordinates
+        "fg5": "#597185",                         # hints, very secondary
+        "accent": "#68E098",                      # the one accent
+        "accent_press": "#4CAF50",
+        "accent_tint": "rgba(104,224,152,0.12)",
+        "accent_tint2": "rgba(104,224,152,0.22)",
+        "on_accent": "#06210f",                   # text on an accent fill
+        "warn": "#F1A66A",
+        "danger": "#ff6b6b",
+        "info": "#4A9EFF",
+        "disabled": "#597185",
+    },
+    "light": {
+        "canvas": "#E4E9EE",                      # behind the picture: a quiet grey, not the dark of the dark set
+        "shadow": "#C2CBD4",
+        "bg": "#EEF1F4",
+        "surface": "#FFFFFF",
+        "surface2": "#F1F4F7",
+        "surface3": "#E6EBF0",
+        "stripe": "#DDE3E9",                      # the label column on a white page
+        "elev": "rgba(15,23,32,0.03)",
+        "elev_soft": "rgba(15,23,32,0.02)",
+        "press": "rgba(15,23,32,0.10)",
+        "border": "rgba(15,23,32,0.10)",
+        "border2": "rgba(15,23,32,0.16)",
+        "fg1": "#161B22",
+        "fg2": "#4E5966",
+        "fg3": "#6E7885",                         # darkened from the design's #8A94A0: it read at 2.7:1
+        "fg4": "#5C7183",
+        "fg5": "#77828E",
+        "accent": "#248049",                      # darkened until accent text clears 4.5:1 on the page
+        "accent_press": "#1B6438",
+        "accent_tint": "rgba(36,128,73,0.12)",
+        "accent_tint2": "rgba(36,128,73,0.18)",
+        "on_accent": "#ffffff",                   # white on the deeper green: 4.9:1
+        "warn": "#B4682A",
+        "danger": "#C94F4F",
+        "info": "#2A6FBF",
+        "disabled": "#A8B1BA",
+    },
+}
+
+# spacing and radii, from the same 4-px scale
+SP = {"1": 2, "2": 4, "3": 6, "4": 8, "5": 10, "6": 12, "7": 16, "8": 20, "9": 24}
+
+
+def _theme(name: str) -> dict:
+    return THEMES.get(name) or THEMES["dark"]
+
+
+C = _theme("dark")                  # rebound by set_theme(); every style below is built from it
+THEME = "dark"                      # the name C was built from, for the parts Qt's palette cannot reach
+
+
+def set_theme(name: str) -> None:
+    """Point the module-level palette at a theme. Call before building a window."""
+    global C, THEME
+    THEME = name if name in THEMES else "dark"
+    C = _theme(THEME)
+    _restyle()
+
+
+# annotation groups the user can switch on and off, as the catalogues the objects come from: (key, label).
+# The order is the precedence order — an object held by more than one catalogue (M31 is also NGC 224, NGC 7000
+# is also Sharpless 2-117) is listed under the first enabled one only, so it is never double-labelled.
+GROUPS = tuple((k, catalogue.LABELS[k]) for k in catalogue.KEYS)
+_SUPPORTED = frozenset(imageio.SUPPORTED)
+
+# Styles that depend on the palette are built by _restyle(), which runs at import and whenever the theme
+# changes. Everything below is a module-level name so the widgets can reach it.
+BAR_QSS = TOGGLE_QSS = PANEL_QSS = BUTTON_QSS = SUBTITLE_QSS = None
+
+
+def _css(pairs: dict) -> dict:
+    """Fill a stylesheet template from the palette."""
+    return dict(pairs)
+
+
+def _qss(template: str, pairs: dict) -> str:
+    """Substitute the palette and round Qt's whole-pixel widths: the tokens speak of a 0.5 px hairline, which
+    Qt's style-sheet parser ignores, so those become 1 px. The hairline look comes from the low-alpha border
+    colour rather than from the width."""
+    return re.sub(r"\d+\.5px", "1px", template % _css(pairs))
+
+
+def _restyle():
+    """(Re)build every stylesheet from the current palette.
+
+    The rules stay close to the TTAstroRoom component set: hairline borders instead of drawn outlines, small
+    radii, flat fills, and state shown by a tint or an overlay rather than by a new colour.
+    """
+    global BAR_QSS, TOGGLE_QSS, PANEL_QSS, BUTTON_QSS, SUBTITLE_QSS
+    BAR_QSS = _qss("""
+    /* the bar of screening controls: one translucent sheet over the picture */
+    #imageBar{background:%(surface)s;border:1px solid %(border2)s;border-radius:8px}
+    #imageBar QToolButton{color:%(fg2)s;background:transparent;border:none;border-radius:4px;
+                         font-size:15px;padding:0}
+    #imageBar QToolButton:hover:enabled{background:%(elev)s;color:%(fg1)s}
+    #imageBar QToolButton:pressed:enabled{background:%(press)s}
+    #imageBar QToolButton:disabled{color:%(disabled)s}
+    #imageBar QToolButton:checked{background:%(accent_tint2)s;color:%(accent)s}
+    QFrame#barSep{color:%(border2)s}
+    """, C)
+    # Toggles are chips rather than boxes with ticks: the state is the fill, which reads at a glance and keeps
+    # a column of them looking like one set of controls. Qt applies :checked to a checkable QCheckBox, so
+    # these stay ordinary check boxes with their signals and keyboard behaviour.
+    TOGGLE_QSS = _qss("""
+    QCheckBox{background:%(surface)s;border:1px solid %(border2)s;border-radius:6px;color:%(fg2)s;
+              padding:4px 10px;spacing:0px}
+    QCheckBox:hover{border-color:%(fg3)s;color:%(fg1)s}
+    QCheckBox:checked{background:%(accent_tint2)s;border:1px solid %(accent)s;color:%(accent)s;
+                      font-weight:600}
+    QCheckBox:checked:hover{background:%(accent_tint)s}
+    QCheckBox:disabled{color:%(disabled)s;border-color:%(border)s}
+    /* no indicator at all: the fill is the state. Zero size alone still let the panel's indicator rule paint
+       a stray dot before every label, so the subcontrol is neutralised completely here. */
+    QCheckBox::indicator{width:0px;height:0px;border:none;background:transparent;image:none;margin:0px}
+    """, C)
+    # A section heading as a bar, the way the design uses a stripe between sections
+    SUBTITLE_QSS = _qss("QLabel{background:%(stripe)s;color:%(fg1)s;font-weight:600;"
+                        "padding:5px 10px;border-radius:3px}", C)
+    PANEL_QSS = _qss("""
+    QWidget{color:%(fg1)s}
+    QLabel{background:transparent;color:%(fg2)s}
+    QLabel#section{color:%(fg3)s;font-weight:600;font-size:11px;letter-spacing:1px;
+                   padding-top:10px;padding-bottom:2px}
+    QLabel#note{color:%(fg5)s}
+    QLabel#value{color:%(fg1)s}
+    /* inputs: dark surface, hairline border, accent only on focus */
+    QComboBox,QLineEdit,QSpinBox,QDoubleSpinBox{background:%(surface2)s;border:0.5px solid %(border2)s;
+        border-radius:4px;padding:4px 8px;color:%(fg1)s;selection-background-color:%(accent)s;
+        selection-color:%(on_accent)s}
+    QLineEdit:focus,QComboBox:focus{border:1px solid %(accent)s}
+    QLineEdit[bad="true"]{border:1px solid %(danger)s}
+    QComboBox::drop-down{border:none;width:16px}
+    /* the spin buttons: plain 16-px columns; the arrows themselves are drawn by _ArrowStyle, because a
+       stylesheet on the field hides Fusion's own little bitmaps and leaves two empty squares */
+    QSpinBox::up-button,QDoubleSpinBox::up-button{width:16px;border:none;background:transparent}
+    QSpinBox::down-button,QDoubleSpinBox::down-button{width:16px;border:none;background:transparent}
+    QSpinBox::up-button:hover,QDoubleSpinBox::up-button:hover,
+    QSpinBox::down-button:hover,QDoubleSpinBox::down-button:hover{background:%(elev)s}
+    QComboBox QAbstractItemView{background:%(surface)s;border:0.5px solid %(border2)s;color:%(fg1)s;
+        selection-background-color:%(accent_tint2)s;selection-color:%(accent)s;outline:none}
+    /* panels and their titles */
+    QDockWidget{color:%(fg3)s;font-size:11px;letter-spacing:1px}
+    QDockWidget::title{background:%(bg)s;padding:5px 8px;text-align:left}
+    QMainWindow::separator{background:%(border)s;width:1px;height:1px}
+    /* secondary buttons: flat fill, no outline */
+    QPushButton{background:%(surface2)s;border:0.5px solid %(border)s;border-radius:4px;padding:6px 10px;
+        color:%(fg1)s}
+    QPushButton:hover{background:%(stripe)s}
+    QPushButton:pressed{background:%(press)s}
+    QPushButton:disabled{background:%(surface)s;color:%(disabled)s;border-color:%(border)s}
+    QPlainTextEdit{background:%(canvas)s;border:0.5px solid %(border)s;border-radius:4px;color:%(fg3)s;
+        font-family:'JetBrains Mono','Consolas',monospace;font-size:11px}
+    QProgressBar{background:%(surface3)s;border:none;border-radius:2px}
+    QProgressBar::chunk{background:%(accent)s;border-radius:2px}
+    /* thin, quiet scroll bars */
+    QScrollBar:vertical{background:transparent;width:9px;margin:0}
+    QScrollBar::handle:vertical{background:%(stripe)s;border-radius:4px;min-height:28px}
+    QScrollBar::handle:vertical:hover{background:%(fg3)s}
+    QScrollBar:horizontal{background:transparent;height:9px;margin:0}
+    QScrollBar::handle:horizontal{background:%(stripe)s;border-radius:4px;min-width:28px}
+    QScrollBar::handle:horizontal:hover{background:%(fg3)s}
+    QScrollBar::add-line,QScrollBar::sub-line{height:0;width:0}
+    QScrollBar::add-page,QScrollBar::sub-page{background:transparent}
+    QStatusBar{color:%(fg3)s}
+    QStatusBar::item{border:none}
+    QToolBar{background:%(bg)s;border:none;spacing:2px;padding:3px}
+    QToolBar QToolButton{background:transparent;border:0.5px solid transparent;border-radius:4px;
+        padding:4px 8px;color:%(fg2)s}
+    QToolBar QToolButton:hover{background:%(elev)s;color:%(fg1)s}
+    QToolBar QToolButton:checked{background:%(accent_tint2)s;border-color:%(accent)s;color:%(accent)s}
+    QToolBar::separator{background:%(border)s;width:1px;margin:4px 5px}
+    /* 全选 / 清空: a quiet accent link, coloured by the sheet so a live theme change reaches it */
+    QToolButton#link{color:%(accent)s;border:none;background:transparent;padding:0 3px}
+    QToolButton#link:hover{text-decoration:underline}
+    QToolTip{background:%(surface)s;color:%(fg1)s;border:0.5px solid %(border2)s;padding:4px 6px}
+    QMenu{background:%(surface)s;border:0.5px solid %(border2)s;color:%(fg1)s;padding:4px}
+    QMenu::item{padding:5px 18px 5px 12px;border-radius:3px}
+    QMenu::item:selected{background:%(accent_tint2)s;color:%(accent)s}
+    QMenu::separator{height:1px;background:%(border)s;margin:4px 6px}
+    QCheckBox{color:%(fg2)s;spacing:6px}
+    /* A real check box, as opposed to the pill toggles: Qt draws the indicator itself, and left unstyled it
+       paints a dark box with a dark border that vanishes on these backgrounds. */
+    QCheckBox::indicator{width:15px;height:15px;border:1px solid %(border2)s;border-radius:3px;
+        background:%(surface2)s}
+    QCheckBox::indicator:hover{border-color:%(accent)s}
+    QCheckBox::indicator:checked{background:%(accent)s;border-color:%(accent)s}
+    QCheckBox::indicator:disabled{background:%(surface3)s;border-color:%(border)s}
+    QHeaderView::section{background:%(surface)s;border:none;border-right:0.5px solid %(border)s;
+        border-bottom:0.5px solid %(border)s;padding:4px 8px;color:%(fg3)s}
+    QTableWidget{background:%(surface)s;border:0.5px solid %(border)s;gridline-color:%(border)s;
+        color:%(fg2)s;selection-background-color:%(accent_tint2)s;selection-color:%(accent)s}
+    QMessageBox{background:%(surface)s}
+    QDialog{background:%(surface)s}
+    """, C)
+    BUTTON_QSS = _qss("QPushButton{background:%(accent)s;color:%(on_accent)s;font-weight:600;padding:8px;"
+                      "border:none;border-radius:4px}"
+                      "QPushButton:hover{background:%(accent_press)s}"
+                      "QPushButton:pressed{background:%(accent_press)s}"
+                      "QPushButton:disabled{background:%(surface3)s;color:%(disabled)s}", C)
+
+
+# The vertical air a section heading brings with it (see QLabel#section in PANEL_QSS above): blocks in the
+# panel column that have no heading above them ask for the same amount through _build_panel's gap().
+SECTION_GAP = 15
+
+
+_restyle()
+
+
+def _toggle(parent, text, checked, tooltip="", min_width=0):
+    """A check box that looks like a pill: checked means filled with the accent colour."""
+    c = QCheckBox(text, parent)
+    c.setChecked(checked)
+    c.setCursor(Qt.PointingHandCursor)
+    if tooltip:
+        c.setToolTip(tooltip)
+    if min_width:
+        c.setMinimumWidth(min_width)
+    return c
+
+
+class Switch(QAbstractButton):
+    """A two-state switch: a track that fills with the accent and a knob that slides to the other side.
+
+    The colour scheme is one of two values, so a switch reads better than a drop-down: one click flips it, and
+    the state is visible without opening anything.
+    """
+
+    def __init__(self, parent=None, width=44, height=24):
+        super().__init__(parent)
+        self.setCheckable(True)
+        self.setCursor(Qt.PointingHandCursor)
+        self.setFixedSize(width, height)
+        self._knob = 0.0
+        self._anim = QPropertyAnimation(self, b"knob", self)
+        self._anim.setDuration(140)
+        self.toggled.connect(self._slide)
+
+    def _slide(self, on):
+        self._anim.stop()
+        self._anim.setStartValue(self._knob)
+        self._anim.setEndValue(1.0 if on else 0.0)
+        self._anim.start()
+
+    def get_knob(self):
+        return self._knob
+
+    def set_knob(self, value):
+        self._knob = float(value)
+        self.update()
+
+    knob = pyqtProperty(float, get_knob, set_knob)
+
+    def sizeHint(self):
+        return QSize(self.width(), self.height())
+
+    def paintEvent(self, _ev):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing, True)
+        track = QRectF(0.5, 0.5, self.width() - 1.0, self.height() - 1.0)
+        radius = track.height() / 2.0
+        on = self.isChecked()
+        p.setPen(QPen(QColor(C["border2"]), 1.0))
+        p.setBrush(QColor(C["accent"] if on else C["surface2"]))
+        p.drawRoundedRect(track, radius, radius)
+        r = radius - 3.0
+        left = track.left() + 3.0 + r
+        right = track.right() - 3.0 - r
+        cx = left + (right - left) * self._knob
+        p.setPen(Qt.NoPen)
+        p.setBrush(QColor(C["on_accent"] if on else C["fg2"]))
+        p.drawEllipse(QPointF(cx, track.center().y()), r, r)
+
+
+def _paint_spin_arrows(widget):
+    """Draw the up/down arrows on a spin box.
+
+    A stylesheet that gives the field a border and a background makes Qt paint the sub-controls itself, and the
+    arrows Fusion would draw are lost — two empty squares are all that is left. The buttons still exist and
+    still take clicks; only the marks are missing, so they are painted here, on top, in the palette's own text
+    colour (which means a live theme switch recolours them too).
+    """
+    p = QPainter(widget)
+    p.setRenderHint(QPainter.Antialiasing, True)
+    p.setPen(Qt.NoPen)
+    p.setBrush(QColor(C["fg2"] if widget.isEnabled() else C["disabled"]))
+    w = 16.0
+    r = 3.4
+    cx = widget.width() - w / 2.0
+    upper = widget.height() * 0.30
+    lower = widget.height() * 0.70
+    p.drawPolygon(QPolygonF((QPointF(cx - r, upper + r * 0.6), QPointF(cx + r, upper + r * 0.6),
+                             QPointF(cx, upper - r * 0.8))))
+    p.drawPolygon(QPolygonF((QPointF(cx - r, lower - r * 0.6), QPointF(cx + r, lower - r * 0.6),
+                             QPointF(cx, lower + r * 0.8))))
+
+
+class SpinBox(QSpinBox):
+    """A QSpinBox that keeps its arrows under a stylesheet (see _paint_spin_arrows)."""
+
+    def paintEvent(self, ev):
+        super().paintEvent(ev)
+        _paint_spin_arrows(self)
+
+
+class DoubleSpinBox(QDoubleSpinBox):
+    """A QDoubleSpinBox that keeps its arrows under a stylesheet (see _paint_spin_arrows)."""
+
+    def paintEvent(self, ev):
+        super().paintEvent(ev)
+        _paint_spin_arrows(self)
+
+
+def _list_qss(widget):
+    """List styling with both selection states spelled out: as soon as a QSS rule touches ::item, Qt stops
+    taking the highlighted-text colour from the palette, so without these the selected row keeps the canvas
+    colour and cannot be read. The unfocused list gets a tint instead of a fill, which is also how the two
+    lists stay distinguishable at a glance."""
+    return ("QListWidget{background:%(surface2)s;border:1px solid %(border)s;border-radius:4px;"
+            "padding:3px;outline:none}"
+            "QListWidget::item{height:%(row)dpx;padding-left:8px;border-radius:3px;color:%(fg2)s}"
+            "QListWidget::item:selected{background:%(accent)s;color:%(on_accent)s}"
+            "QListWidget::item:selected:!active{background:%(accent_tint2)s;color:%(accent)s}"
+            "QListWidget::item:hover:!selected{background:%(elev)s;color:%(fg1)s}"
+            % dict(C, row=_list_row_height(widget)))
+
+
+def _list_row_height(widget):
+    """A comfortable row height for the two file lists: the font plus a few pixels of air. Taken from the
+    font, so it stays right when the interface font scales up."""
+    return widget.fontMetrics().height() + 9
 
 
 # ───────────────────────────── workers ─────────────────────────────
 class LoadWorker(QThread):
     done = pyqtSignal(object)            # dict
 
-    def __init__(self, path, stretch, parent=None):
+    def __init__(self, path, stretch, debayer=True, bayer_pattern="auto", parent=None):
         super().__init__(parent)
         self.path, self.stretch = path, stretch
+        self.debayer = debayer
+        self.bayer_pattern = bayer_pattern
 
     def run(self):
         out = {"path": self.path}
+        self._out = out
         try:
-            img = imageio.load(self.path)
+            img = imageio.load(self.path, want_debayer=self.debayer,
+                               pattern="" if self.bayer_pattern == "auto" else self.bayer_pattern)
             out["mode"] = imageio.auto_mode(img) if self.stretch == "auto" else self.stretch
-            disp = imageio.display_stretch(img, out["mode"])
-            a = np.ascontiguousarray((np.clip(disp, 0, 1) * 255 + 0.5).astype(np.uint8))
+            out["color"] = img.is_color
+            out["mosaic"] = img.is_bayer_mosaic
+            rgb, balance, levels = imageio.display_u8(img, out["mode"])
+            # keep what made this picture, so the histogram panel opens on the very state on screen
+            img._balance = balance
+            img._levels = levels
+            a = rgb
             h, w = a.shape[:2]
             out["qimage"] = QImage(a.data, w, h, 3 * w, QImage.Format_RGB888).copy()
             out["img"] = img
@@ -67,30 +444,208 @@ class LoadWorker(QThread):
         self.done.emit(out)
 
 
+class FolderScan(QThread):
+    """Read the pixel size of every picture in a folder, off the GUI thread.
+
+    The sizes decide which files are previews (see imageio.drop_previews). A folder can sit on a slow disk or a
+    network share, so the first list is built with every file and the previews are taken out when this answers.
+    """
+
+    done = pyqtSignal(str, object, object)          # folder, names, kept
+
+    def __init__(self, folder, names, parent=None):
+        super().__init__(parent)
+        self.folder, self.names = folder, list(names)
+
+    def run(self):
+        try:
+            kept = imageio.drop_previews(self.folder, self.names)
+        except Exception:                           # a broken file must not cost the whole list
+            kept = list(self.names)
+        self.done.emit(self.folder, self.names, kept)
+
+
 class AnnotateWorker(QThread):
+    """Solve and annotate a queue of images. Nothing is written here: after each image the main thread is
+    asked whether to save, and this thread waits for that answer, so a batch run still shows its results one
+    by one and only writes what was agreed to."""
     log = pyqtSignal(str)
     progress = pyqtSignal(int, float)     # queue index, fraction
     finished_one = pyqtSignal(int, object)
+    save_prompt = pyqtSignal(object, object, str)   # (worker, result, path)
 
     def __init__(self, items, opt, parent=None):
         super().__init__(parent)
         self.items, self.opt = items, opt     # [(index, path)]
+        self._answer = None
+        self._reply = threading.Event()
+
+    def answer(self, flags):
+        """Called by the main thread with what to write (see MainWindow._save_prompt)."""
+        self._answer = flags
+        self._reply.set()
 
     def run(self):
         for idx, path in self.items:
             try:
-                res = run.process(path, self.opt, log=self.log.emit,
-                                  progress=lambda f, msg, i=idx: self.progress.emit(i, f))
+                img, res, disp = run.solve(path, self.opt, log=self.log.emit,
+                                           progress=lambda f, msg, i=idx: self.progress.emit(i, f))
+                if res.ok:
+                    self._reply.clear()
+                    self._answer = None
+                    self.save_prompt.emit(self, res, path)
+                    self._reply.wait(300)          # the window always answers; the cap is a safety net
+                    flags = self._answer or {}
+                    if flags.get("_remember"):                    # "use this from now on"
+                        self.opt.write_txt = bool(flags.get("txt"))
+                        self.opt.write_outlines = bool(flags.get("outlines"))
+                        self.opt.write_preview = bool(flags.get("preview"))
+                        self.opt.write_wcs = bool(flags.get("wcs"))
+                    if not flags.get("_cancel") and any(
+                            flags.get(k) for k in ("txt", "outlines", "preview", "wcs")):
+                        run.write_outputs(img, res, self.opt, disp, log=self.log.emit)
             except Exception as e:                     # never let a worker die silently
                 res = run.Result(image=path, error="%s\n%s" % (e, traceback.format_exc()))
             self.finished_one.emit(idx, res)
 
 
 # ───────────────────────────── image view ─────────────────────────────
+class Spinner(QWidget):
+    """The loading mark: an accent-coloured arc turning over a faint track.
+
+    Reading and stretching a 20-megapixel frame takes a moment, and without a mark the window looks frozen
+    while it happens. It is drawn rather than shown as a static picture so it costs nothing to keep turning,
+    and its own timer stops when it is hidden.
+    """
+
+    def __init__(self, parent=None, size=34):
+        super().__init__(parent)
+        self._angle = 0
+        self._size = size
+        self.setFixedSize(size, size)
+        self.setAttribute(Qt.WA_TransparentForMouseEvents)   # never in the way of a click or a drag
+        self._timer = QTimer(self)
+        self._timer.setInterval(45)
+        self._timer.timeout.connect(self._turn)
+        self.hide()
+
+    def _turn(self):
+        self._angle = (self._angle + 24) % 360
+        self.update()
+
+    def showEvent(self, ev):
+        self._timer.start()
+        super().showEvent(ev)
+
+    def hideEvent(self, ev):
+        self._timer.stop()
+        super().hideEvent(ev)
+
+    def paintEvent(self, _ev):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        w = max(2.0, self._size / 14.0)
+        r = (self._size - w) / 2.0
+        p.translate(self._size / 2.0, self._size / 2.0)
+        track = QPen(QColor(C["fg5"]))
+        track.setWidthF(w)
+        track.setCapStyle(Qt.RoundCap)
+        p.setPen(track)
+        p.drawEllipse(QRectF(-r, -r, 2 * r, 2 * r))
+        arc = QPen(QColor(C["accent"]))
+        arc.setWidthF(w)
+        arc.setCapStyle(Qt.RoundCap)
+        p.setPen(arc)
+        # a 90-degree arc at the current angle: drawArc measures in 1/16 degrees, clockwise from 3 o'clock
+        p.drawArc(QRectF(-r, -r, 2 * r, 2 * r), int(-self._angle * 16), int(90 * 16))
+
+
+def _display_u8(disp, own=False):
+    """The 8-bit RGB the view paints, from a display array already in 0..1.
+
+    `own` says the caller is done with `disp`: the scale and round-off are then written into that array instead
+    of into two more 26-megapixel temporaries. Never pass own=True for an array the loaded image still holds
+    (`img.data`), which is what the "none" stretch hands back.
+    """
+    a = np.asarray(disp, np.float32)
+    shared = a is disp
+    if a.ndim == 2:
+        a = np.repeat(a[..., None], 3, axis=2)
+        shared = False
+    elif a.shape[2] == 1:
+        a = np.repeat(a, 3, axis=2)
+        shared = False
+    if own and not shared and a.flags.writeable:
+        np.multiply(a, 255.0, out=a)
+        np.add(a, 0.5, out=a)
+        return np.ascontiguousarray(a.astype(np.uint8))
+    return np.ascontiguousarray((np.clip(a, 0, 1) * 255 + 0.5).astype(np.uint8))
+
+
+def _box_downscale(qimage, tw, th):
+    """Average a QImage down to tw x th, so every source pixel contributes instead of being skipped.
+
+    Qt's own smooth scaling does not do this when the factor is large: it samples, and sampling a star field
+    with a two-pixel structure against a 7:1 grid produces a lattice of stripes. A box filter cannot, because
+    it is exactly the operation being approximated by the sampling.
+
+    Pillow's BOX resampling is that average, written in C: averaging 26 megapixels down to a screen-sized copy
+    takes about a third of a second, where the numpy `add.reduceat` version spent over a second building two
+    float32 copies of the frame first.
+    """
+    if qimage.width() <= tw and qimage.height() <= th:
+        return qimage
+    src = qimage.convertToFormat(QImage.Format_RGB888)
+    w, h = src.width(), src.height()
+    tw, th = max(1, min(tw, w)), max(1, min(th, h))
+    ptr = src.bits()
+    ptr.setsize(src.byteCount())
+    arr = np.frombuffer(ptr, np.uint8).reshape(h, src.bytesPerLine())[:, : w * 3]
+    arr = np.ascontiguousarray(arr.reshape(h, w, 3))
+    from PIL import Image
+    small = np.asarray(Image.fromarray(arr).resize((tw, th), Image.BOX))
+    out = np.ascontiguousarray(small)
+    oh, ow = out.shape[:2]
+    return QImage(out.data, ow, oh, 3 * ow, QImage.Format_RGB888).copy()
+
+
+class _LabelText(QGraphicsSimpleTextItem):
+    """A label drawn as a small plate: the name in its object's colour on a dark rounded chip.
+
+    Plain coloured text disappears over a bright nebula core or a galaxy disc; the chip keeps every name
+    readable, and its hairline carries the object's own shade so a crowded field still reads as many objects.
+    """
+
+    PAD = 3.0
+
+    def __init__(self, text, color, parent=None):
+        super().__init__(text, parent)
+        self._line = QColor(color)
+        self.setBrush(QBrush(self._line))
+
+    def boundingRect(self):
+        r = super().boundingRect()
+        return r.adjusted(-self.PAD, -self.PAD * 0.55, self.PAD, self.PAD * 0.7)
+
+    def paint(self, painter, option, widget=None):
+        r = super().boundingRect()
+        chip = QRectF(r.left() - self.PAD, r.top() - self.PAD * 0.55,
+                      r.width() + 2 * self.PAD, r.height() + self.PAD * 1.25)
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        pen = QPen(self._line, 0.8)
+        pen.setCosmetic(True)
+        painter.setPen(pen)
+        painter.setBrush(QColor(2, 4, 10, 168))
+        painter.drawRoundedRect(chip, 3.5, 3.5)
+        super().paint(painter, option, widget)
+
+
 class ImageView(QGraphicsView):
     moved = pyqtSignal(float, float)      # scene coordinates
     files_dropped = pyqtSignal(list)
     zoom_changed = pyqtSignal(float)
+    open_requested = pyqtSignal()         # a click on an empty view asks for the file dialog
+    step_requested = pyqtSignal(int)      # keyboard stepping: -1 / +1
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -106,15 +661,101 @@ class ImageView(QGraphicsView):
         self.setDragMode(QGraphicsView.ScrollHandDrag)
         self.setTransformationAnchor(QGraphicsView.AnchorUnderMouse)
         self.setRenderHints(QPainter.Antialiasing | QPainter.SmoothPixmapTransform)
-        self.setBackgroundBrush(QColor("#0B0E12"))
+        self.setBackgroundBrush(QColor(C["canvas"]))
         self.setMouseTracking(True)
         self.setAcceptDrops(True)
         self._fit = True
+        self._empty = True                     # no picture yet: a click opens the file dialog
+        # where each label landed last time: {text: (anchor x, anchor y, dx, dy)} in image px and screen px,
+        # so a zoom can put the same label back at the same place instead of shuffling every name
+        self._label_prev = {}
+        # the full-resolution picture, and the resolution currently in the pixmap (see _rebuild_pixmap)
+        self._source = None
+        self._pix_size = None
+        self._pix_factor = 1.0
+        # The view, its viewport and the bar each report Enter/Leave, and the pointer can be inside more than
+        # one of them, so those events are counted rather than treated as a single flag.
+        self._bar = None
+        for w in (self, self.viewport()):
+            w.installEventFilter(self)
+        # the loading mark, laid over the picture while a frame is being read and stretched
+        self._loading = False
+        self.spinner = Spinner(self)
+        self._load_timer = QTimer(self)
+        self._load_timer.setSingleShot(True)
+        self._load_timer.timeout.connect(self._show_spinner)
+        self._set_grab(False)                  # an empty view shows an arrow cursor and is clickable
         self.placeholder = self.scene().addText("")
-        self.placeholder.setDefaultTextColor(QColor("#7A8794"))
+        self.placeholder.setDefaultTextColor(QColor(C["fg3"]))
         f = QFont()
         f.setPointSize(14)
         self.placeholder.setFont(f)
+
+    def eventFilter(self, obj, ev):
+        """The wheel must not die on the bar: send it to the viewport, which is where the view scales."""
+        bar = getattr(self, "_bar", None)
+        if ev.type() == QEvent.Wheel and bar is not None and (obj is bar or bar.isAncestorOf(obj)):
+            from PyQt5.QtGui import QWheelEvent
+            self.viewport().setFocus()
+            self.wheelEvent(QWheelEvent(ev.posF(), ev.globalPosF(), ev.pixelDelta(), ev.angleDelta(),
+                                        ev.buttons(), ev.modifiers(), ev.phase(), ev.inverted()))
+            return True
+        return super().eventFilter(obj, ev)
+
+    def set_image_bar(self, bar):
+        """The bar of screening controls that floats along the bottom edge (built by MainWindow)."""
+        self._bar = bar
+        bar.setStyleSheet(BAR_QSS)
+        bar.hide()
+        for w in (bar,) + tuple(bar.findChildren(QToolButton)):
+            w.installEventFilter(self)      # the wheel zooms the picture even over the bar
+        self._place_nav()
+
+    # loading mark ---------------------------------------------------------
+    def set_loading(self, on):
+        """A frame is being read. The mark is delayed a moment: on a small file the load is over before it
+        would appear, and a mark that flashes on every step reads as a stutter rather than as progress. The
+        picture already on screen stays visible underneath, so the mark never replaces what the user is
+        looking at."""
+        self._loading = bool(on)
+        if on:
+            self._load_timer.start(120)
+        else:
+            self._load_timer.stop()
+            self.spinner.hide()
+
+    def _show_spinner(self):
+        if not getattr(self, "_loading", False):
+            return
+        self._place_spinner()
+        self.spinner.show()
+        self.spinner.raise_()
+
+    def _place_spinner(self):
+        """Centred on the viewport, which is where the picture actually is, rather than on the widget."""
+        vp = self.viewport()
+        self.spinner.move(max(0, vp.x() + (vp.width() - self.spinner.width()) // 2),
+                          max(0, vp.y() + (vp.height() - self.spinner.height()) // 2))
+
+    def _place_nav(self):
+        """Keep the bar of screening controls on the bottom edge, centred, clear of the scroll bar."""
+        bar = getattr(self, "_bar", None)
+        if not self._empty and bar is not None and bar.isVisible():
+            bottom = 14 + self.horizontalScrollBar().height()
+            bar.adjustSize()
+            bar.move(max(8, (self.width() - bar.width()) // 2),
+                     max(8, self.height() - bar.height() - bottom))
+            bar.raise_()
+        if getattr(self, "spinner", None) is not None and self.spinner.isVisible():
+            self._place_spinner()
+            self.spinner.raise_()
+
+    def _set_grab(self, on):
+        self.setDragMode(QGraphicsView.ScrollHandDrag if on else QGraphicsView.NoDrag)
+        if on:
+            self.viewport().setCursor(Qt.OpenHandCursor)
+        else:
+            self.viewport().unsetCursor()
 
     def set_placeholder(self, text):
         self.placeholder.setPlainText(text)
@@ -122,36 +763,196 @@ class ImageView(QGraphicsView):
         if text:
             self.setSceneRect(self.placeholder.boundingRect())
             self.centerOn(self.placeholder)
+        self._empty = bool(text)
+        self._set_grab(not self._empty)
+        self._place_nav()
 
-    def set_image(self, qimage, keep_view=False):
+    def _view_state(self):
+        """Zoom and place of the current picture as (display size, scale, scene point at the viewport
+        centre), or None while the picture is fitted. Switching to another frame of the same size puts the
+        view back here, so the same detail can be compared from one frame to the next."""
+        if self._fit or self.pix.pixmap().isNull() or self._source is None:
+            return None
+        # the picture's own size, not the size of the pixmap on screen: at a zoom below 1 that is a box-
+        # averaged copy, and comparing it with the next frame's size would call every such frame different
+        c = self.mapToScene(self.viewport().rect().center())
+        return ((self._source.width(), self._source.height()), self.transform().m11(), (c.x(), c.y()))
+
+    def _apply_view(self, state):
+        """Restore a state from _view_state(). The point is a scene coordinate, so the same spot of the
+        picture stays under the centre of the viewport whatever the two displays' shapes are."""
+        _size, scale, (x, y) = state
+        self._fit = False
+        self.setTransform(self.transform().fromScale(scale, scale))
+        # Put the point back under the viewport centre by setting the scroll bars ourselves. centerOn() uses
+        # its own rounding of the centre (it halves the viewport width, where the state was read from
+        # rect().center()), and that one-pixel disagreement walked the picture right and down with every
+        # switch. Reading and writing through the same centre makes the round trip exact.
+        c = self.viewport().rect().center()
+        self.horizontalScrollBar().setValue(int(round(x * scale - c.x())))
+        self.verticalScrollBar().setValue(int(round(y * scale - c.y())))
+        self._relayout()
+        self.zoom_changed.emit(scale)
+
+    def clear_image(self):
+        """Nothing left to show (every image in the folder is gone): back to the empty state."""
+        self.pix.setPixmap(QPixmap())
+        self.set_placeholder(t("把图片拖到这里,或点「打开」"))
+
+    def set_theme(self, theme):
+        """Repaint the parts the window's stylesheet cannot reach: the canvas behind the picture and the drop
+        hint. Called when the colour scheme changes while the window is open."""
+        self.setBackgroundBrush(QColor(theme["canvas"]))
+        self.placeholder.setDefaultTextColor(QColor(theme["fg3"]))
+        self.viewport().update()
+
+    def _pixmap_for(self, qimage, factor):
+        """qimage, or a box-averaged copy at `factor` of its size, plus that copy's scale factor.
+
+        A 26-megapixel pixmap shown at 14% is squeezed by Qt on every paint; this makes the filtered copy up
+        front instead, so the first paint costs nothing and no deferred rebuild has to freeze the window."""
+        if factor >= 0.6 or qimage.width() < 16 or qimage.height() < 16:
+            return qimage, 1.0
+        tw = max(8, int(round(qimage.width() * factor)))
+        th = max(8, int(round(qimage.height() * factor)))
+        small = _box_downscale(qimage, tw, th)
+        if small is None or small.isNull() or small.width() >= qimage.width():
+            return qimage, 1.0
+        return small, small.width() / float(qimage.width())
+
+    def _show_source(self, qimage, factor):
+        """Put qimage on screen as the current picture, honouring a zoom factor below 1 with a box average.
+
+        Returns the image actually put up: the caller may want its pixels (the brightness map) and they are
+        already at screen size.
+        """
+        small, used = self._pixmap_for(qimage, factor)
+        self.pix.setPixmap(QPixmap.fromImage(small))
+        self._pix_size, self._pix_factor = None, 1.0
+        if used < 1.0:
+            self.pix.setScale(1.0 / used)          # the item still covers the whole scene rectangle
+            self._pix_size = (small.width(), small.height())
+            self._pix_factor = used
+        else:
+            self.pix.setScale(1.0)
+        return small
+
+    def set_image(self, qimage, view=None):
+        """view: a _view_state() to restore — only meaningful for a picture of the same pixel size, so the
+        caller passes it only when the display size is unchanged (see MainWindow.show_image)."""
         self.set_placeholder("")
-        self.pix.setPixmap(QPixmap.fromImage(qimage))
-        self.setSceneRect(QRectF(0, 0, qimage.width(), qimage.height()))
-        self.overlay.setRect(0, 0, qimage.width(), qimage.height())
-        # a small grey copy tells the label placement where the picture is bright
-        k = min(1.0, 1200.0 / max(1, qimage.width(), qimage.height()))
-        g = qimage.scaled(max(1, int(qimage.width() * k)), max(1, int(qimage.height() * k)),
-                          Qt.IgnoreAspectRatio, Qt.SmoothTransformation).convertToFormat(QImage.Format_Grayscale8)
+        self._source = qimage
+        w, h = qimage.width(), qimage.height()
+        vw, vh = max(1, self.viewport().width() - 2), max(1, self.viewport().height() - 2)
+        fit = min(1.0, vw / float(w), vh / float(h)) if w > 16 and h > 16 else 1.0
+        # coming back to a zoomed view: build the on-screen copy at that zoom, not at fitted size
+        factor = fit if view is None else min(1.0, max(float(view[1]), 1.0 / 64.0))
+        small = self._show_source(qimage, factor)
+        self.setSceneRect(QRectF(0, 0, w, h))
+        self.overlay.setRect(0, 0, w, h)
+        # a small grey copy tells the label placement where the picture is bright; taken from the screen-sized
+        # copy just made rather than scaling 26 megapixels with Qt again
+        if max(small.width(), small.height()) > 1200:
+            k = 1200.0 / max(small.width(), small.height())
+            small = _box_downscale(small, max(1, int(round(small.width() * k))),
+                                   max(1, int(round(small.height() * k))))
+        g = small.convertToFormat(QImage.Format_Grayscale8)
         ptr = g.bits()
         ptr.setsize(g.byteCount())
         arr = np.frombuffer(ptr, np.uint8).reshape(g.height(), g.bytesPerLine())[:, :g.width()]
-        self._bright = style.Brightness(arr.astype(np.float32) / 255.0, k)
-        if not keep_view:
+        self._bright = style.Brightness(arr.astype(np.float32) / 255.0, g.width() / float(w))
+        if view is not None:
+            self._apply_view(view)
+        else:
             self.fit()
 
+    def show_array(self, disp, own=False):
+        """Replace the picture with a display-ready array, keeping the zoom and scroll position.
+
+        Used by the histogram panel: dragging a level must change what is on screen without the view jumping
+        back to fitted. `own` says the array may be written over (see _display_u8).
+        """
+        self.show_rgb(_display_u8(disp, own=own))
+
+    def show_rgb(self, rgb):
+        """Replace the picture with an 8-bit RGB array, keeping the zoom and scroll position.
+
+        The histogram panel's live redraw comes in here already converted: the stretch is a 16-bit table, so
+        there is no float frame to make first.
+        """
+        rgb = np.ascontiguousarray(rgb)
+        h, w = rgb.shape[:2]
+        qimage = QImage(rgb.data, w, h, 3 * w, QImage.Format_RGB888).copy()
+        state = self._view_state()
+        self._source = qimage
+        factor = min(1.0, max(self.transform().m11(), 1.0 / 64.0))
+        self._show_source(qimage, factor)
+        self.setSceneRect(QRectF(0, 0, w, h))
+        self.overlay.setRect(0, 0, w, h)
+        if state is not None:
+            self._apply_view(state)
+
     def fit(self):
-        if self.pix.pixmap().isNull():
+        if self.pix.pixmap().isNull() and self._source is None:
             return
         self._fit = True
         self.fitInView(self.pix, Qt.KeepAspectRatio)
         self._relayout()
+        self._schedule_pixmap()
         self.zoom_changed.emit(self.transform().m11())
 
     def one_to_one(self):
         self._fit = False
         self.setTransform(self.transform().fromScale(1.0, 1.0))
         self._relayout()
+        self._schedule_pixmap()
         self.zoom_changed.emit(1.0)
+
+    def _schedule_pixmap(self):
+        """Re-pick the pixmap resolution soon, not on every event of a zoom gesture."""
+        if not hasattr(self, "_pixmap_timer"):
+            self._pixmap_timer = QTimer(self)
+            self._pixmap_timer.setSingleShot(True)
+            self._pixmap_timer.timeout.connect(self._rebuild_pixmap)
+        self._pixmap_timer.start(120)
+
+    def _rebuild_pixmap(self):
+        """Choose a pixmap resolution that matches the zoom, so Qt never squeezes the frame by a large factor.
+
+        Qt's smooth scaling samples the source for each destination pixel. That is fine when the two are close
+        in size, but a 6248-pixel frame shown at 14% leaves it picking one source pixel out of every seven, and
+        the picture's own two-pixel structure — the residue a Bayer reconstruction always leaves — beats
+        against that sampling grid and shows as a lattice of stripes across the whole image. Averaging first
+        (a true box filter, which sampling cannot emulate) and leaving Qt a factor of at most two removes it.
+
+        Zooming in is never smoothed: at 1:1 or beyond every pixel must be shown as it is.
+        """
+        if getattr(self, "_source", None) is None or self._source.isNull():
+            return
+        W, H = self._source.width(), self._source.height()
+        scale = float(self.transform().m11())
+        factor = min(1.0, max(scale, 1.0 / 64.0))
+        if factor >= 0.6 or W < 16 or H < 16:
+            if getattr(self, "_pix_factor", 1.0) != 1.0 or getattr(self, "_pix_size", None):
+                self._pix_factor = 1.0
+                self._pix_size = None          # the next zoomed-out pass must build its copy again
+                self.pix.setPixmap(QPixmap.fromImage(self._source))
+                self.pix.setScale(1.0)
+            return
+        tw = max(8, int(round(W * factor)))
+        th = max(8, int(round(H * factor)))
+        # a few pixels either way is invisible; rebuilding on every wheel notch is not free
+        if getattr(self, "_pix_size", None) and abs(tw - self._pix_size[0]) <= 3 \
+                and abs(th - self._pix_size[1]) <= 3:
+            return
+        small = _box_downscale(self._source, tw, th)
+        if small is None or small.isNull():
+            return
+        self._pix_size = (tw, th)
+        self._pix_factor = tw / float(W)
+        self.pix.setPixmap(QPixmap.fromImage(small))
+        # keep the item occupying the same rectangle in scene coordinates, so the overlay stays aligned
+        self.pix.setScale(W / float(tw))
 
     def wheelEvent(self, ev):
         k = 1.25 if ev.angleDelta().y() > 0 else 0.8
@@ -160,12 +961,23 @@ class ImageView(QGraphicsView):
             self._fit = False
             self.scale(k, k)
             self._relayout()
+            self._schedule_pixmap()
             self.zoom_changed.emit(s)
 
     def resizeEvent(self, ev):
         super().resizeEvent(ev)
+        self._place_nav()
         if self._fit:
             self.fit()
+
+    def mousePressEvent(self, ev):
+        # An empty view is a big "open" button; with a picture loaded the drag/pan handling stays untouched.
+        # The hit test must run on the viewport: childAt() on the view itself reports its viewport.
+        if self._empty and ev.button() == Qt.LeftButton and self.viewport().childAt(ev.pos()) is None:
+            self.open_requested.emit()
+            ev.accept()
+            return
+        super().mousePressEvent(ev)
 
     def mouseMoveEvent(self, ev):
         p = self.mapToScene(ev.pos())
@@ -186,6 +998,7 @@ class ImageView(QGraphicsView):
     # overlay -------------------------------------------------------------
     def clear_overlay(self):
         self._overlay_args = None
+        self._label_prev = {}
         self._clear_items()
 
     def _clear_items(self):
@@ -193,17 +1006,28 @@ class ImageView(QGraphicsView):
             self.scene().removeItem(it)
 
     def draw_overlay(self, shapes, named, grid=None, categories=None, show_named=True, shape_style="outline"):
+        """New data (a different frame, or a different set of groups): place the labels afresh."""
         self._overlay_args = (shapes, named, grid, categories, show_named, shape_style)
+        self._label_prev = {}
         self._draw_overlay(*self._overlay_args)
 
     def _relayout(self):
-        """Labels are laid out in screen pixels, so they are placed again when the zoom changes."""
+        """Labels are laid out in screen pixels, so they are placed again when the zoom changes.
+
+        The placement found last time is tried first: the text keeps the same screen offset from its object,
+        so zooming does not make every name jump to a different side. Only a label that would now land on
+        another one is placed again."""
+        self._place_nav()                          # the bar follows the viewport
         if getattr(self, "_overlay_args", None):
             self._draw_overlay(*self._overlay_args)
 
     def _draw_overlay(self, shapes, named, grid, categories, show_named, shape_style):
         self._clear_items()
-        W, H = self.pix.pixmap().width(), self.pix.pixmap().height()
+        # The frame's size in *scene* units — the pixels of the picture, not of the pixmap showing it. Zoomed
+        # out, the pixmap is a downscaled copy (see _rebuild_pixmap), so its width is a fraction of the image's;
+        # taking the bounds from it clamped every label into the top-left corner as soon as the view zoomed.
+        W = int(round(self.overlay.rect().width())) or self.pix.pixmap().width()
+        H = int(round(self.overlay.rect().height())) or self.pix.pixmap().height()
         s = self.transform().m11() or 1.0
         font = QFont("Segoe UI", 9, QFont.DemiBold)
         sfont = QFont("Segoe UI", 9)
@@ -253,32 +1077,71 @@ class ImageView(QGraphicsView):
             anchors = style.label_anchors(e, W, H, polys) if e.get("label") else []
             if anchors:
                 prio = 0 if e["label"][:1] == "M" and e["label"][1:2].isdigit() else 1
-                labels.append((prio, anchors, e["label"], col, font, 6 if e.get("kind") == "point" else 0))
+                # a big object's name goes in the middle of its own shape (a huge circle labelled at its rim
+                # reads as a label for the sky beside it); small ones keep their label outside
+                inside = style.inside_anchor(polys)
+                labels.append((prio, anchors, e["label"], col, font,
+                               6 if e.get("kind") == "point" else 0, inside))
         for r in (named or []) if show_named else []:
             col = QColor(style.STAR_COLOR)
             self._marker(r.x, r.y, 7, col)
             name = r.name + (" " + r.extra.get("common") if r.extra.get("common") else "")
-            labels.append((2, [(r.x, r.y, None)], name, col, sfont, 7))
-        # greedy placement in screen pixels: outside each outline (or around a point), inside the frame, clear
-        # of labels already placed and preferably on a dark background; Messier objects choose first, star
-        # names last
+            labels.append((2, [(r.x, r.y, None)], name, col, sfont, 7, None))
+        # greedy placement in screen pixels: inside a big shape, otherwise outside an outline (or around a
+        # point), inside the frame, clear of labels already placed and preferably on a dark background;
+        # Messier objects choose first, star names last. A label with nowhere left to go is left out rather
+        # than printed across another one.
         placed = list(grid_boxes)
-        for _p, anchors, text, col, f, rad in sorted(labels, key=lambda lb: lb[0]):
-            it = self._label(0, 0, text, col, f)
+        bright = getattr(self, "_bright", None)
+        for _p, anchors, text, col, f, rad, inside in sorted(labels, key=lambda lb: lb[0]):
+            it = self._label(0, 0, text, col, f, attach=False)
             bw, bh = it.boundingRect().width(), it.boundingRect().height()
             gap = 5 + rad
-            boxes = []
-            for ax, ay, outward in anchors:
-                sx, sy = ax * s, ay * s
-                for ox, oy in style.label_offsets(outward, bw, bh, gap):
-                    bx = min(max(sx + ox, 2), W * s - bw - 2)
-                    by = min(max(sy + oy, 2), H * s - bh - 2)
-                    boxes.append((ax, ay, bx, by))
-            rects = [(bx / s, by / s, (bx + bw) / s, (by + bh) / s) for _ax, _ay, bx, by in boxes]  # image px
-            best = style.choose_box(rects, placed, getattr(self, "_bright", None))
-            ax, ay, bx, by = boxes[rects.index(best)]
+            best = None
+            ax = ay = bx = by = 0.0
+            # put this name back where it was at the previous zoom, if that still fits: a fixed screen offset
+            # from the same anchor means the label does not wander while the picture is being zoomed
+            prev = self._label_prev.get(text)
+            if prev is not None:
+                pax, pay, pdx, pdy = prev
+                pbx, pby = pax * s + pdx, pay * s + pdy
+                if 2 <= pbx <= W * s - bw - 2 and 2 <= pby <= H * s - bh - 2:
+                    pbox = (pbx / s, pby / s, (pbx + bw) / s, (pby + bh) / s)
+                    if style.choose_box([pbox], placed, None, may_skip=True) is not None:
+                        best, ax, ay, bx, by = pbox, pax, pay, pbx, pby
+            if best is None and inside is not None:
+                cx, cy, iw, ih = inside
+                if bw <= 0.6 * iw * s and bh <= 0.6 * ih * s:
+                    bx = min(max(cx * s - bw / 2, 2), W * s - bw - 2)
+                    by = min(max(cy * s - bh / 2, 2), H * s - bh - 2)
+                    box = (bx / s, by / s, (bx + bw) / s, (by + bh) / s)
+                    if style.choose_box([box], placed, None, may_skip=True) is not None \
+                            and (bright is None or bright(box) < 0.55):
+                        best, ax, ay = box, cx, cy
+            if best is None:
+                boxes = []
+                for axx, ayy, outward in anchors:
+                    sx, sy = axx * s, ayy * s
+                    for ox, oy in style.label_offsets(outward, bw, bh, gap):
+                        bx = min(max(sx + ox, 2), W * s - bw - 2)
+                        by = min(max(sy + oy, 2), H * s - bh - 2)
+                        boxes.append((axx, ayy, bx, by))
+                rects = [(bx / s, by / s, (bx + bw) / s, (by + bh) / s)
+                         for _ax, _ay, bx, by in boxes]                     # image px
+                best = style.choose_box(rects, placed, bright, may_skip=True)
+                if best is None:
+                    continue                 # crowded patch: a missing name beats two names on top of each other
+                # by identity, not by ==: clamped candidates can be equal rectangles at different anchors,
+                # and pairing a box with the wrong anchor would make the label jump on the next zoom
+                idx = next((i for i, r in enumerate(rects) if r is best), None)
+                if idx is None:
+                    continue
+                ax, ay, bx, by = boxes[idx]
             placed.append(best)
-            it.parentItem().setPos(ax, ay)
+            self._label_prev[text] = (ax, ay, bx - ax * s, by - ay * s)
+            anchor = it.parentItem()
+            anchor.setParentItem(self.overlay)
+            anchor.setPos(ax, ay)
             it.setPos(bx - ax * s, by - ay * s)
 
     def _marker(self, x, y, r, col):
@@ -290,26 +1153,132 @@ class ImageView(QGraphicsView):
         it.setFlag(it.ItemIgnoresTransformations)
         it.setParentItem(self.overlay)
 
-    def _label(self, x, y, text, col, font, dx=4, dy=4):
+    def _label(self, x, y, text, col, font, dx=4, dy=4, attach=True):
         # An invisible anchor that ignores the view's zoom sits on the object; the text is its child, so the
         # (dx, dy) offset stays in screen pixels at any zoom (an item transform would be scaled with it).
+        # attach=False leaves it out of the scene while the placement is measured, so a label that finds no
+        # room never flashes at the frame's corner.
         anchor = QGraphicsRectItem(0, 0, 0, 0)
         anchor.setPen(QPen(Qt.NoPen))
         anchor.setFlag(anchor.ItemIgnoresTransformations)
         anchor.setPos(x, y)
-        it = QGraphicsSimpleTextItem(text, anchor)
+        it = _LabelText(text, col, anchor)
         it.setFont(font)
-        it.setBrush(QBrush(col))
         it.setPos(dx, dy)
-        anchor.setParentItem(self.overlay)
+        it._anchor = anchor                 # an unparented anchor is Python-owned: keep it alive while measuring
+        if attach:
+            anchor.setParentItem(self.overlay)
         return it
 
 
 # ───────────────────────────── dialogs ─────────────────────────────
-class HeaderDialog(QDialog):
-    def __init__(self, img, parent=None):
+def _hist_mark_icon():
+    """The bar-chart mark beside the histogram panel's title, drawn here so no icon file or glyph is needed."""
+    pm = QPixmap(32, 32)
+    pm.fill(Qt.transparent)
+    p = QPainter(pm)
+    col = QColor(C["accent"])
+    for x, h in ((4, 7), (10, 16), (16, 23), (22, 12)):
+        p.fillRect(QRectF(x, 27 - h, 4, h), col)
+    p.end()
+    return QIcon(pm)
+
+
+class FramedDialog(QDialog):
+    """A dialog drawn as a card over the window: its own title row and one close button, no system frame.
+
+    The system frame put a second ✕ (and a "?" on Windows) above whatever the dialog itself offered. These
+    dialogs draw their own chrome instead: a rounded card with a hairline border, the title and a single ✕, a
+    title row that can be dragged to move the dialog, and a resize grip in the bottom-right corner. Esc and
+    Enter keep their usual meaning.
+
+    Subclasses put their content in `self.body`; `btn_close` is the one close button.
+    """
+
+    def __init__(self, parent=None, title="", icon=None, resizable=True):
         super().__init__(parent)
-        self.setWindowTitle("%s · %s" % (t("文件头"), os.path.basename(img.path)))
+        self.setWindowTitle(title)
+        self.setWindowFlags(self.windowFlags() | Qt.FramelessWindowHint)
+        self.setAttribute(Qt.WA_TranslucentBackground, True)
+        self.setStyleSheet(self._card_sheet())
+        self._grab_at = None
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        self.frame = QFrame()
+        self.frame.setObjectName("dlgFrame")
+        outer.addWidget(self.frame)
+        self._lay = QVBoxLayout(self.frame)
+        self._lay.setContentsMargins(SP["6"], SP["6"], SP["6"], SP["5"])
+        self._lay.setSpacing(SP["3"])
+
+        head = QHBoxLayout()
+        head.setSpacing(SP["3"])
+        if icon is not None:
+            mark = QLabel()
+            mark.setPixmap(icon.pixmap(16, 16))
+            mark.setFixedSize(16, 16)
+            mark.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+            head.addWidget(mark)
+        self.lbl_title = QLabel(title)
+        self.lbl_title.setStyleSheet("color:%s;font-weight:600;font-size:13px" % C["fg1"])
+        self.lbl_title.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        self.lbl_title.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        head.addWidget(self.lbl_title, 1)
+        self.btn_close = QToolButton()
+        self.btn_close.setText("✕")
+        self.btn_close.setFixedSize(26, 26)
+        self.btn_close.setCursor(Qt.PointingHandCursor)
+        self.btn_close.setToolTip(t("关闭"))
+        self.btn_close.setStyleSheet("QToolButton{background:transparent;border:none;color:%s;font-size:13px}"
+                                     "QToolButton:hover{color:%s;background:%s;border-radius:13px}"
+                                     % (C["fg3"], C["danger"], C["elev"]))
+        head.addWidget(self.btn_close)
+        self._lay.addLayout(head)
+
+        self.body = QVBoxLayout()
+        self.body.setContentsMargins(0, 0, 0, 0)
+        self.body.setSpacing(SP["3"])
+        self._lay.addLayout(self.body, 1)
+
+        if resizable:
+            row = QHBoxLayout()
+            row.setContentsMargins(0, 0, 0, 0)
+            row.addStretch(1)
+            grip = QSizeGrip(self.frame)
+            grip.setFixedSize(14, 14)
+            row.addWidget(grip)
+            self._lay.addLayout(row)
+        self.btn_close.clicked.connect(self.reject)
+
+    def _card_sheet(self):
+        """The panel sheet plus the rules that turn this dialog into a card (rebuilt on a live theme change)."""
+        return (PANEL_QSS
+                + "#dlgFrame{background:%s;border:1px solid %s;border-radius:10px}"
+                  "QDialog{background:transparent}" % (C["surface"], C["border2"]))
+
+    def mousePressEvent(self, ev):
+        """Dragging the title row moves the dialog: it has no frame of its own to grab by."""
+        if ev.button() == Qt.LeftButton and ev.y() <= 52:
+            self._grab_at = ev.globalPos() - self.frameGeometry().topLeft()
+            ev.accept()
+            return
+        super().mousePressEvent(ev)
+
+    def mouseMoveEvent(self, ev):
+        if self._grab_at is not None and (ev.buttons() & Qt.LeftButton):
+            self.move(ev.globalPos() - self._grab_at)
+            ev.accept()
+            return
+        super().mouseMoveEvent(ev)
+
+    def mouseReleaseEvent(self, ev):
+        self._grab_at = None
+        super().mouseReleaseEvent(ev)
+
+
+class HeaderDialog(FramedDialog):
+    def __init__(self, img, parent=None):
+        super().__init__(parent, "%s · %s" % (t("文件头"), os.path.basename(img.path)))
         self.resize(760, 560)
         rows = []
         if img.fmt == "xisf":
@@ -339,21 +1308,223 @@ class HeaderDialog(QDialog):
         tab.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
         tab.setEditTriggers(QAbstractItemView.NoEditTriggers)
         tab.resizeColumnsToContents()
-        lay = QVBoxLayout(self)
-        lay.addWidget(tab)
+        self.body.addWidget(tab)
 
 
-class SettingsDialog(QDialog):
+class FixHeaderDialog(FramedDialog):
+    """Correct the pointing and optics a FITS file records.
+
+    A frame can arrive with a focal length that belongs to another telescope, and with it a pixel scale that
+    makes every solver search the wrong field size (ASTAP then reports that the field is too small for its
+    star database); a wide-field rig may record no pointing at all. Both values are what the solve runs on, so
+    they are written into the file here. The panel's own hint follows from the file, so it is right afterwards
+    without another word.
+    """
+
+    def __init__(self, img, parent=None):
+        super().__init__(parent, "%s · %s" % (t("修正文件头"), os.path.basename(img.path)))
+        self.img = img
+        self.written = []
+        self.resize(580, 330)
+        kw = img.keywords
+        hint = imageio.hints(img)
+        f = QFormLayout()
+        f.setContentsMargins(0, 0, 0, 0)
+        f.setSpacing(SP["3"])
+        self.focal = DoubleSpinBox()
+        self.focal.setRange(1.0, 10000.0)
+        self.focal.setDecimals(1)
+        self.focal.setSuffix(" mm")
+        self.focal.setValue(_header_float(kw.get("FOCALLEN"), 1.0) or 1.0)
+        self.focal.setToolTip(t("镜头的实际焦距；解析器用它算像素尺度和视场"))
+        f.addRow(t("焦距"), self.focal)
+        self.pix = DoubleSpinBox()
+        self.pix.setRange(0.5, 50.0)
+        self.pix.setDecimals(3)
+        self.pix.setSuffix(" µm")
+        self.pix.setValue(_header_float(kw.get("XPIXSZ"), 0.0) or 1.0)
+        self.pix.setToolTip(t("传感器像元尺寸（含 Bin）"))
+        f.addRow(t("像素尺寸"), self.pix)
+        self.ra = QLineEdit()
+        self.ra.setPlaceholderText("04 03 20")
+        self.dec = QLineEdit()
+        self.dec.setPlaceholderText("+36 22 00")
+        if hint.get("ra") is not None and hint.get("dec") is not None:
+            self.ra.setText(fmt_ra(hint["ra"]))
+            self.dec.setText(fmt_dec(hint["dec"]))
+        coord = QHBoxLayout()
+        coord.setContentsMargins(0, 0, 0, 0)
+        coord.setSpacing(SP["3"])
+        coord.addWidget(self.ra, 1)
+        coord.addWidget(self.dec, 1)
+        f.addRow(t("画面中心"), coord)
+        self.body.addLayout(f)
+        self.all_files = _toggle(self, t("应用到整个文件夹"), False,
+                                 t("把同样的值写进这个文件夹里的每一张 FITS"))
+        self.count_label = QLabel()
+        self.count_label.setObjectName("note")
+        self._folder_paths = _folder_fits(os.path.dirname(img.path))
+        if len(self._folder_paths) <= 1:
+            self.all_files.setEnabled(False)
+            self.count_label.setText(t("（这个文件夹里只有这一张）"))
+        else:
+            self.count_label.setText(t("（共 %d 张 FITS）") % len(self._folder_paths))
+        scope = QHBoxLayout()
+        scope.setContentsMargins(0, 0, 0, 0)
+        scope.setSpacing(SP["3"])
+        scope.addWidget(self.all_files)
+        scope.addWidget(self.count_label)
+        scope.addStretch(1)
+        self.body.addLayout(scope)
+        self.info = QLabel()
+        self.info.setObjectName("note")
+        self.info.setWordWrap(True)
+        self.body.addWidget(self.info)
+        row = QHBoxLayout()
+        row.addStretch(1)
+        self.btn_cancel = QPushButton(t("取消"))
+        self.btn_cancel.clicked.connect(self.reject)
+        self.btn_write = QPushButton(t("写入文件"))
+        self.btn_write.setStyleSheet(BUTTON_QSS)
+        self.btn_write.setDefault(True)
+        self.btn_write.clicked.connect(self.accept)
+        row.addWidget(self.btn_cancel)
+        row.addWidget(self.btn_write)
+        self.body.addLayout(row)
+        for w in (self.focal, self.pix):
+            w.valueChanged.connect(self._update_info)
+        for w in (self.ra, self.dec):
+            w.textChanged.connect(self._update_info)
+        self._update_info()
+
+    def _update_info(self):
+        focal, pix = self.focal.value(), self.pix.value()
+        bad = False
+        if focal > 0 and pix > 0:
+            scale = 206.264806 * pix / focal
+            self.info.setText("%s %.2f″/px · %s %.2f° × %.2f°" % (
+                t("像素尺度"), scale, t("视场"),
+                self.img.width * scale / 3600.0, self.img.height * scale / 3600.0))
+        else:
+            self.info.setText("")
+        ra_text, dec_text = self.ra.text().strip(), self.dec.text().strip()
+        if ra_text or dec_text:
+            bad = parse_radec("%s %s" % (ra_text, dec_text)) is None
+        for w in (self.ra, self.dec):
+            if bool(w.property("bad")) != bad:
+                w.setProperty("bad", bad)
+                w.style().unpolish(w)
+                w.style().polish(w)
+
+    def target_paths(self):
+        """The files this dialog will write: just the one on screen, or every FITS frame beside it."""
+        if self.all_files.isChecked():
+            return list(self._folder_paths)
+        return [self.img.path]
+
+    def accept(self):
+        ra_text, dec_text = self.ra.text().strip(), self.dec.text().strip()
+        radec = None
+        if ra_text or dec_text:
+            radec = parse_radec("%s %s" % (ra_text, dec_text))
+            if radec is None:
+                self.info.setText(t("坐标无法识别（时 分 秒 / 度 分 秒）：") + " " + ra_text + " " + dec_text)
+                return
+        self.done_paths, self.failed_paths = [], []
+        paths = self.target_paths()
+        if len(paths) > 1:
+            self._write_many(paths, radec)
+        else:
+            try:
+                self.written = imageio.fix_header(
+                    self.img.path, focal_mm=self.focal.value(), pix_um=self.pix.value(),
+                    ra=radec[0] if radec else None, dec=radec[1] if radec else None)
+            except Exception as e:
+                QMessageBox.warning(self, "TTSkyAnnot", "%s\n\n%s" % (t("无法写入文件头"), e))
+                return
+            self.done_paths = [self.img.path]
+            self.img.keywords.update(imageio.header_keywords(self.img.path))
+        super().accept()
+
+    def _write_many(self, paths, radec):
+        """Write the same values into every frame, showing how far along it is and allowing a stop."""
+        prog = QProgressDialog(t("正在写入文件头"), t("取消"), 0, len(paths), self)
+        prog.setWindowTitle("TTSkyAnnot")
+        prog.setWindowModality(Qt.WindowModal)
+        prog.setMinimumDuration(0)
+        prog.setValue(0)
+        state = {"stop": False}
+
+        def on_progress(i, _n, path):
+            prog.setValue(i)
+            prog.setLabelText("%s\n%s" % (t("正在写入文件头"), os.path.basename(path)))
+            QApplication.processEvents()
+            if prog.wasCanceled():
+                state["stop"] = True
+
+        try:
+            done, failed = imageio.fix_header_batch(
+                paths, focal_mm=self.focal.value(), pix_um=self.pix.value(),
+                ra=radec[0] if radec else None, dec=radec[1] if radec else None,
+                progress=on_progress, should_stop=lambda: state["stop"])
+        finally:
+            prog.close()
+        self.done_paths, self.failed_paths = done, failed
+        if self.img.path in done:
+            self.img.keywords.update(imageio.header_keywords(self.img.path))
+        if failed:
+            QMessageBox.warning(
+                self, "TTSkyAnnot", "%s\n\n%s" % (
+                    t("有 %d 张写不进去（见日志）") % len(failed),
+                    "\n".join("%s: %s" % (os.path.basename(p), e) for p, e in failed[:6])))
+
+
+
+def _header_float(text, default=0.0):
+    try:
+        return float(str(text).strip().strip("'"))
+    except (TypeError, ValueError):
+        return default
+
+
+def _folder_fits(folder):
+    """The FITS frames in a folder, in the same order the file list shows them (previews left out)."""
+    try:
+        names = sorted(f for f in os.listdir(folder)
+                       if os.path.splitext(f)[1].lower() in imageio.FITS_EXT
+                       and not imageio.preview_name(f))
+    except OSError:
+        return []
+    return [os.path.join(folder, n) for n in names]
+
+
+class SettingsDialog(FramedDialog):
     def __init__(self, cfg, parent=None):
-        super().__init__(parent)
-        self.setWindowTitle(t("设置"))
+        super().__init__(parent, t("设置"))
         self.cfg = dict(cfg)
-        f = QFormLayout(self)
+        self._theme0 = str(cfg.get("theme", "dark"))
+        f = QFormLayout()
+        f.setContentsMargins(0, 0, 0, 0)
+        f.setSpacing(SP["3"])
         self.lang = QComboBox()
         for code, name in (("", t("跟随系统")), ("zh", "中文"), ("en", "English")):
             self.lang.addItem(name, code)
         self.lang.setCurrentIndex(max(0, self.lang.findData(cfg.get("language", ""))))
         f.addRow(t("界面语言"), self.lang)
+        self.theme_switch = Switch()
+        self.theme_switch.setChecked(cfg.get("theme", "dark") == "light")
+        self.theme_switch.setToolTip(t("打开为浅色、关闭为深色；切换后立即生效"))
+        self.theme_switch.setAccessibleName(t("界面配色"))
+        theme_row = QHBoxLayout()
+        theme_row.setContentsMargins(0, 0, 0, 0)
+        theme_row.setSpacing(SP["3"])
+        theme_row.addWidget(self.theme_switch)
+        self.lbl_theme = QLabel(t("浅色") if self.theme_switch.isChecked() else t("深色"))
+        self.lbl_theme.setObjectName("value")
+        theme_row.addWidget(self.lbl_theme)
+        theme_row.addStretch(1)
+        self.theme_switch.toggled.connect(self._theme_chosen)
+        f.addRow(t("界面配色"), theme_row)
         self.nova = QLineEdit(cfg.get("nova_api_key", ""))
         self.nova.setEchoMode(QLineEdit.PasswordEchoOnEdit)
         f.addRow(t("nova.astrometry.net API key(可选,最后的兜底)"), self.nova)
@@ -364,7 +1535,43 @@ class SettingsDialog(QDialog):
         row.addWidget(self.astap)
         row.addWidget(b)
         f.addRow(t("ASTAP 路径(可选,离线解析)"), row)
-        self.gmag = QDoubleSpinBox()
+        self.pi = QLineEdit(cfg.get("pixinsight_path", ""))
+        b_pi = QPushButton(t("浏览…"))
+        b_pi.clicked.connect(lambda: self._browse(self.pi, file=True))
+        row_pi = QHBoxLayout()
+        row_pi.addWidget(self.pi)
+        row_pi.addWidget(b_pi)
+        f.addRow(t("PixInsight 路径(留空 = 自动查找)"), row_pi)
+        self.tw = QLineEdit(cfg.get("tickwhale_base", ""))
+        self.tw.setPlaceholderText("https://app.tickwhale.com")
+        self.tw.setToolTip(t("在线天体库地址。填了它，天体名输入框会在本地星表之外再查这个库"
+                             "（LBN/LDN 等本地没有的编号都在那里）；留空则只查本地星表。"))
+        f.addRow(t("在线天体库(留空 = 关闭)"), self.tw)
+        self.upd = QLineEdit(cfg.get("update_url", ""))
+        self.upd.setPlaceholderText("https://…  /  \\\\server\\share\\updates  /  E:\\updates")
+        self.upd.setToolTip(t("更新源：放着 version.json 的地址、网络共享或文件夹。留空则启动时不检查更新，"
+                              "仍可用状态栏的「检查更新」手动查。"))
+        b_upd = QPushButton(t("浏览…"))
+        b_upd.clicked.connect(lambda: self._browse(self.upd, file=False))
+        row_upd = QHBoxLayout()
+        row_upd.addWidget(self.upd)
+        row_upd.addWidget(b_upd)
+        f.addRow(t("更新源(留空 = 关闭)"), row_upd)
+        self.chk_confirm_del = _toggle(self, t("删除图像前先确认"), bool(cfg.get("confirm_delete", True)))
+        self.chk_confirm_del.setStyleSheet(TOGGLE_QSS)
+        self.chk_confirm_del.setToolTip(t("关掉后按删除键就直接移入回收站（仍可撤销）"))
+        f.addRow(t("删除确认"), self.chk_confirm_del)
+        self.chk_debayer = _toggle(self, t("自动解拜耳单次彩色图像"), bool(cfg.get("debayer", True)))
+        self.chk_debayer.setStyleSheet(TOGGLE_QSS)
+        self.chk_debayer.setToolTip(t("单次彩色相机的原始帧是单通道的马赛克；开启后自动插值成彩色再显示。"
+                                      "关掉可查看原始马赛克数据。"))
+        f.addRow(t("解拜耳"), self.chk_debayer)
+        self.chk_existing = _toggle(self, t("复用文件头里已有的解"), bool(cfg.get("use_existing", True)))
+        self.chk_existing.setStyleSheet(TOGGLE_QSS)
+        self.chk_existing.setToolTip(t("文件里已经带天体测量解时（ASIAIR/NINA/PixInsight 都会写），"
+                                       "先和画面里的星点核对，对得上就直接用，省掉整轮解析。"))
+        f.addRow(t("已有解"), self.chk_existing)
+        self.gmag = DoubleSpinBox()
         self.gmag.setRange(8, 21)
         self.gmag.setDecimals(1)
         self.gmag.setValue(float(cfg.get("gaia_mag", 16)))
@@ -376,12 +1583,20 @@ class SettingsDialog(QDialog):
         row2.addWidget(self.out)
         row2.addWidget(b2)
         f.addRow(t("输出位置(留空 = 图片所在文件夹)"), row2)
+        self.slide = DoubleSpinBox()
+        self.slide.setRange(0.3, 60.0)
+        self.slide.setDecimals(1)
+        self.slide.setSingleStep(0.5)
+        self.slide.setSuffix(t(" 秒"))
+        self.slide.setValue(float(cfg.get("slide_interval", 2.0)))
+        f.addRow(t("自动播放间隔"), self.slide)
         bb = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         bb.button(QDialogButtonBox.Ok).setText(t("确定"))
         bb.button(QDialogButtonBox.Cancel).setText(t("取消"))
         bb.accepted.connect(self.accept)
         bb.rejected.connect(self.reject)
         f.addRow(bb)
+        self.body.addLayout(f)
 
     def _browse(self, edit, file):
         p = (QFileDialog.getOpenFileName(self, "", edit.text())[0] if file
@@ -390,10 +1605,541 @@ class SettingsDialog(QDialog):
             edit.setText(p)
 
     def values(self):
-        self.cfg.update(language=self.lang.currentData(), nova_api_key=self.nova.text().strip(),
+        self.cfg.update(language=self.lang.currentData(), theme=self.theme_name(),
+                        nova_api_key=self.nova.text().strip(),
                         astap_path=self.astap.text().strip(), gaia_mag=self.gmag.value(),
-                        out_dir=self.out.text().strip())
+                        out_dir=self.out.text().strip(), slide_interval=self.slide.value(),
+                        pixinsight_path=self.pi.text().strip(), tickwhale_base=self.tw.text().strip(),
+                        update_url=self.upd.text().strip(),
+                        confirm_delete=self.chk_confirm_del.isChecked(),
+                        debayer=self.chk_debayer.isChecked(),
+                        use_existing=self.chk_existing.isChecked())
         return self.cfg
+
+    def theme_name(self):
+        """The colour scheme the switch shows: "light" when it is on, "dark" when it is off."""
+        return "light" if self.theme_switch.isChecked() else "dark"
+
+    def _theme_chosen(self, on=False):
+        """Write the colour scheme the moment the switch is flipped.
+
+        The window itself is restyled when this dialog closes: re-applying a stylesheet to a *visible* modal
+        card leaves its labels unpainted, so the switch is applied to the window right after, in settings().
+        """
+        theme = "light" if on else "dark"
+        self.lbl_theme.setText(t("浅色") if on else t("深色"))
+        if theme == self._theme0:
+            return
+        cfg = config.load()
+        cfg["theme"] = theme
+        if not config.save(cfg) and not getattr(self, "_save_warned", False):
+            self._save_warned = True                 # say it once per dialog, not on every flip
+            QMessageBox.warning(self, "TTSkyAnnot",
+                                t("设置文件写入失败：%s\n配色等选项可能在下次启动时不生效。") % config._path())
+
+
+class SaveDialog(FramedDialog):
+    """Asked before anything is written: solving on its own produces no files, and this is where the user
+    says what should land in the folder. Every output can be switched off here, so a solve can be looked at
+    and thrown away."""
+
+    def __init__(self, path, items, defaults=None, parent=None):
+        super().__init__(parent, t("保存解析结果"))
+        self.setMinimumWidth(460)
+        defaults = defaults or {}
+        lay = self.body
+        lay.setContentsMargins(SP["3"], 0, SP["3"], 0)
+        lay.setSpacing(SP["3"])
+
+        head = QLabel(os.path.basename(path))
+        head.setWordWrap(True)
+        head.setStyleSheet("QLabel{font-size:15px;font-weight:600;color:%s}" % C["fg1"])
+        lay.addWidget(head)
+        lay.addSpacing(SP["2"])
+
+        # what will be written, and where
+        where = QLabel(items[0] if items else path)
+        where.setObjectName("note")
+        where.setWordWrap(True)
+        lay.addWidget(where)
+        lay.addSpacing(SP["5"])
+
+        self.chk = {}
+        for key, text in (("txt", "天体列表 TXT"), ("outlines", "轮廓坐标文件"),
+                          ("preview", "标注图"), ("wcs", "解析结果写回图片")):
+            c = _toggle(self, t(text), bool(defaults.get(key, True)))
+            c.setStyleSheet(TOGGLE_QSS)
+            c.setToolTip(items[0] if items else "")
+            lay.addWidget(c, 0, Qt.AlignLeft)
+            self.chk[key] = c
+
+        lay.addSpacing(SP["5"])
+        hint = QLabel(t("不勾就不会写任何文件；「写回图片」会修改原文件的文件头（像素不动）"))
+        hint.setObjectName("note")
+        hint.setWordWrap(True)
+        lay.addWidget(hint)
+
+        lay.addSpacing(SP["4"])
+        # a plain check box, not one of the pills above: this is a standing preference rather than another
+        # thing to write, and it carries its own indicator styling because Qt draws the box itself
+        self.remember = QCheckBox(t("以后都按这次的选择保存"))
+        self.remember.setToolTip(t("批量处理时不再逐个询问"))
+        self.remember.setCursor(Qt.PointingHandCursor)
+        lay.addWidget(self.remember)
+
+        lay.addSpacing(SP["5"])
+        bb = QDialogButtonBox()
+        self.btn_save = bb.addButton(t("保存"), QDialogButtonBox.AcceptRole)
+        bb.addButton(t("不保存"), QDialogButtonBox.RejectRole)
+        btn_cancel = bb.addButton(t("取消处理"), QDialogButtonBox.DestructiveRole)
+        self.btn_save.setDefault(True)
+        self.btn_save.setCursor(Qt.PointingHandCursor)
+        self.btn_save.setStyleSheet(BUTTON_QSS)          # the one filled button: the intended action
+        for b in bb.buttons():
+            b.setCursor(Qt.PointingHandCursor)
+        bb.accepted.connect(self.accept)
+        bb.rejected.connect(self.reject)
+        btn_cancel.clicked.connect(self._cancel_run)
+        self.cancelled = False
+        lay.addWidget(bb)
+
+    def _cancel_run(self):
+        self.cancelled = True
+        self.reject()
+
+    def flags(self):
+        """What to write, plus the two out-of-band signals the worker understands."""
+        out = {k: c.isChecked() for k, c in self.chk.items()}
+        out["_remember"] = self.remember.isChecked()
+        out["_cancel"] = self.cancelled
+        return out
+
+
+class RemoteLookup(QThread):
+    """Ask the tickwhale database for objects matching what is being typed.
+
+    The bundled catalogues are OpenNGC plus Sharpless, which carry no Lynds nebulae and other deep
+    catalogues; the server has them. Doing it on a worker keeps a slow or dead server from stalling typing,
+    and a reply that is no longer about the text in the field is thrown away.
+    """
+    found = pyqtSignal(str, list)            # the text it was asked about, and the records
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._query = ""
+        self._answer = None
+
+    def ask(self, text, base):
+        self._query = text
+        self._answer = None
+        self._base = base
+        if self.isRunning():
+            return                            # the running worker picks the newer text up when it finishes
+        self.start()
+
+    def run(self):
+        while True:
+            text, base = self._query, self._base
+            recs = tickwhale.search(text, base) if base else []
+            if self._query == text:           # nothing newer was typed while the server was answering
+                self.found.emit(text, recs)
+                return
+
+
+class StatsTable(QWidget):
+    """The statistics beside the plot: a colour chip for each channel, then Max / Min / Avg / Std.
+
+    ASIFitsView lays the same numbers out the same way, in 16-bit counts. The chips are what makes the three
+    columns readable at a glance: the eye matches a colour to a curve faster than it reads an "R".
+    """
+
+    ROWS = (("Max", "max"), ("Min", "min"), ("Avg", "avg"), ("Std", "std"))
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._lay = QGridLayout(self)
+        self._lay.setContentsMargins(0, 0, 0, 0)
+        self._lay.setHorizontalSpacing(SP["5"])
+        self._lay.setVerticalSpacing(SP["5"])
+        self._values = {}
+        self._keys = ()
+        self._build(("r", "g", "b"))
+
+    def _build(self, keys) -> None:
+        """One column per channel that the frame actually has (red/green/blue, or luminance for mono)."""
+        while self._lay.count():
+            item = self._lay.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.deleteLater()
+        self._values = {}
+        self._keys = tuple(keys)
+        title = QLabel(t("统计数据"))
+        title.setObjectName("note")
+        self._lay.addWidget(title, 0, 0)
+        mono = "font-family:'Consolas','JetBrains Mono',monospace;font-size:12px"
+        for i, key in enumerate(keys):
+            chip = QLabel()
+            chip.setFixedSize(15, 15)
+            chip.setStyleSheet("background:%s;border-radius:4px" % histview.CH_COLORS.get(key, "#c8d2dc"))
+            self._lay.addWidget(chip, 0, i + 1, Qt.AlignHCenter)
+            for row, (_name, field) in enumerate(self.ROWS, start=1):
+                lab = QLabel("—")
+                lab.setObjectName("value")
+                lab.setStyleSheet(mono)
+                lab.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                self._lay.addWidget(lab, row, i + 1)
+                self._values[(key, field)] = lab
+        for row, (name, _field) in enumerate(self.ROWS, start=1):
+            lab = QLabel(name)
+            lab.setObjectName("note")
+            self._lay.addWidget(lab, row, 0)
+        for i in range(1, len(keys) + 1):
+            self._lay.setColumnStretch(i, 1)
+        self.setMinimumWidth(235 if len(keys) > 1 else 150)
+
+    def set_stats(self, stats: dict) -> None:
+        keys = tuple(k for k in ("r", "g", "b") if stats and k in stats)
+        if not keys:
+            keys = ("l",) if stats and "l" in stats else ()
+        if keys and keys != self._keys:
+            self._build(keys)
+        for key in self._keys:
+            s = stats.get(key) if stats else None
+            for _name, field in self.ROWS:
+                lab = self._values.get((key, field))
+                if lab is not None:
+                    lab.setText("%d" % int(round(float(s[field]) * hist_mod.ADU)) if s else "—")
+
+
+class HistogramDialog(FramedDialog):
+    """The histogram panel: the curve, the draggable levels, and the statistics beside them.
+
+    Follows ASIFitsView's panel in what it offers — auto white balance, auto stretch, reset, and a magnifier
+    that turns a drag across the plot into a zoom — because those are what one actually does while looking at
+    a picture. It changes the display only; the file is never rewritten.
+
+    `raw` is the frame as loaded and `balance` the white balance already applied to it (None or an identity
+    Balance when there is none). The panel shows the balanced frame, which is the data the levels act on, so
+    the black and white markers it draws are the ones the picture on screen was stretched with.
+    """
+
+    changed = pyqtSignal()               # the levels or the balance moved: the preview should follow
+
+    def __init__(self, parent=None, raw=None, balance=None, levels=None, data=None, readout=None):
+        super().__init__(parent, t("直方图"), icon=_hist_mark_icon())
+        self.resize(920, 430)
+        self._raw = np.asarray(raw if raw is not None else data, np.float32)
+        self._balance = balance or imageio.Balance()
+        self._balance0 = self._balance
+        self._base_cache = None
+        self._levels = levels or hist_mod.auto_levels(self._base_data())
+        self._levels0 = self._levels
+        self._readout = readout or {}
+
+        lay = self.body
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(SP["4"])
+
+        top = QHBoxLayout()
+        top.setSpacing(SP["3"])
+        self.btn_awb = QPushButton(t("自动白平衡"))
+        self.btn_auto = QPushButton(t("自动拉伸"))
+        self.btn_reset = QPushButton(t("重置拉伸"))
+        accent = ("QPushButton{background:%s;color:%s;border:none;border-radius:4px;padding:6px 12px;"
+                  "font-weight:600}QPushButton:hover{background:%s}QPushButton:pressed{background:%s}"
+                  "QPushButton:disabled{background:%s;color:%s}"
+                  % (C["accent"], C["on_accent"], C["accent_press"], C["accent_press"],
+                     C["surface3"], C["disabled"]))
+        for b in (self.btn_awb, self.btn_auto):
+            b.setStyleSheet(accent)
+            b.setCursor(Qt.PointingHandCursor)
+            top.addWidget(b)
+        # a single-channel frame has nothing to balance against: leave the button out of reach rather than
+        # letting it look usable
+        self.btn_awb.setEnabled(self._raw.ndim >= 3 and self._raw.shape[2] >= 3)
+        self.btn_reset.setCursor(Qt.PointingHandCursor)
+        top.addWidget(self.btn_reset)
+        self.btn_zoom = QToolButton()
+        self.btn_zoom.setCheckable(True)
+        self.btn_zoom.setFixedSize(28, 28)
+        self.btn_zoom.setCursor(Qt.PointingHandCursor)
+        self.btn_zoom.setToolTip(t("放大镜：在直方图上拖一个框放大；滚轮缩放，拖动平移，双击复位"))
+        self.btn_zoom.setStyleSheet("QToolButton{background:%s;border:1px solid %s;border-radius:14px}"
+                                    "QToolButton:hover{border-color:%s}"
+                                    "QToolButton:checked{background:%s;border-color:%s}"
+                                    % (C["surface2"], C["border2"], C["fg3"], C["accent_tint2"], C["accent"]))
+        self.btn_zoom.setIcon(self._zoom_icon())
+        self.btn_zoom.setIconSize(QSize(16, 16))
+        top.addWidget(self.btn_zoom)
+        top.addStretch(1)
+        lay.addLayout(top)
+
+        body = QHBoxLayout()
+        body.setSpacing(SP["5"])
+        self.view = histview.HistogramView(self)
+        self.view.set_theme(C)
+        self.view.setToolTip(t("滚轮缩放 · 拖动平移 · 双击复位；拖动黑点／白点／中间调改变拉伸"))
+        body.addWidget(self.view, 1)
+        self.stats = StatsTable(self)
+        body.addWidget(self.stats, 0)
+        lay.addLayout(body, 1)
+
+        bottom = QHBoxLayout()
+        bottom.setSpacing(SP["4"])
+        self.lbl_hover = QLabel("")
+        self.lbl_hover.setObjectName("note")
+        bottom.addWidget(self.lbl_hover, 1)
+        self.lbl_vals = QLabel("")
+        self.lbl_vals.setObjectName("note")
+        bottom.addWidget(self.lbl_vals, 0)
+        lay.addLayout(bottom)
+
+        self.btn_awb.clicked.connect(self._auto_white_balance)
+        self.btn_auto.clicked.connect(self._auto_stretch)
+        self.btn_reset.clicked.connect(self._reset)
+        self.btn_zoom.toggled.connect(self._zoom_toggled)
+        self.view.levels_changed.connect(self._changed)
+        self.view.hovered.connect(self._hovered)
+        self.view.left.connect(self._hover_left)
+        self.lbl_hover.setText(self._hint())
+        self._refresh()
+
+    HINT_TEXT = "滚轮缩放 · 拖动平移 · 双击复位；拖动黑点／白点／中间调改变拉伸"
+
+    def _hint(self):
+        return t(self.HINT_TEXT)
+
+    # ---- data ----------------------------------------------------------
+    def _base_data(self):
+        """The balanced frame the levels act on — the same array the preview is built from.
+
+        Kept once: balancing a 26-megapixel frame copies 300 MB, and the panel asks for it several times.
+        """
+        if self._base_cache is None:
+            if self._balance is None or self._balance.is_identity:
+                self._base_cache = self._raw
+            else:
+                self._base_cache = self._balance.apply(self._raw)
+        return self._base_cache
+
+    def _rebuild(self, reset_range: bool = True, levels: hist_mod.Levels = None):
+        """Recompute everything that depends on the data: the plot's sample and the statistics."""
+        if levels is not None:
+            self._levels = levels
+        base = self._base_data()
+        self._sample = base[::3, ::3]
+        self._stats = hist_mod.stats(base)
+        self.view.set_sample(self._sample, self._levels, reset_range=reset_range)
+        self.stats.set_stats(self._stats)
+        self._changed()
+
+    def levels(self):
+        return self._levels
+
+    def balance(self):
+        return self._balance
+
+    def _refresh(self):
+        if self._raw is None or not self._raw.size:
+            return
+        self._rebuild(reset_range=True)
+
+    def _hist_icon(self):
+        """Kept for callers of the old name: the bar-chart mark beside the panel's title."""
+        return _hist_mark_icon()
+
+    def _zoom_icon(self):
+        """A magnifier drawn here rather than borrowed from the theme font: the glyph is not in every font."""
+        pm = QPixmap(32, 32)
+        pm.fill(Qt.transparent)
+        p = QPainter(pm)
+        p.setRenderHint(QPainter.Antialiasing)
+        col = QColor(C["accent"] if self.btn_zoom.isChecked() else C["fg2"]) \
+            if hasattr(self, "btn_zoom") else QColor(C["fg2"])
+        p.setPen(QPen(col, 2.0))
+        p.setBrush(Qt.NoBrush)
+        p.drawEllipse(QRectF(5, 5, 15, 15))
+        p.drawLine(QPointF(18.5, 18.5), QPointF(26, 26))
+        p.end()
+        return QIcon(pm)
+
+    def _zoom_toggled(self, on):
+        self.view.set_zoom_tool(on)
+        self.btn_zoom.setIcon(self._zoom_icon())
+
+    def _changed(self):
+        lv = self._levels
+        self.lbl_vals.setText("%s %d    %s %.3f    %s %d" % (
+            t("黑点"), int(round(lv.black * hist_mod.ADU)), t("中间调"), lv.mid,
+            t("白点"), int(round(lv.white * hist_mod.ADU))))
+
+    def _hovered(self, value, counts):
+        parts = []
+        for key, name in (("r", "R"), ("g", "G"), ("b", "B")):
+            if key in counts:
+                parts.append("%s %s" % (name, histview._fmt_count(counts[key])))
+        self.lbl_hover.setText("%d  %s" % (int(round(value * hist_mod.ADU)), "   ".join(parts)))
+
+    def _hover_left(self):
+        self.lbl_hover.setText(self._hint())
+
+    # ---- actions -------------------------------------------------------
+    def _auto_stretch(self):
+        if self._raw is None or not self._raw.size:
+            return
+        self._rebuild(levels=hist_mod.auto_levels(self._base_data()))
+        self.changed.emit()
+
+    def _auto_white_balance(self):
+        """ASIFitsView's white balance on the frame as loaded, then its auto stretch."""
+        if self._raw is None or self._raw.ndim < 3 or self._raw.shape[2] < 3:
+            return
+        self._balance = imageio.awb_balance(self._raw)
+        self._base_cache = None
+        base = self._base_data()
+        self._rebuild(levels=hist_mod.auto_levels(base))
+        self.changed.emit()
+
+    def _reset(self):
+        self._balance = self._balance0
+        self._base_cache = None
+        self._rebuild(levels=self._levels0)
+        self.changed.emit()
+
+
+class _UpdateCheck(QThread):
+    """Reads the published feed off the GUI thread: a network share can be slow, or gone."""
+
+    done = pyqtSignal(object, str)                 # feed or None, error text
+
+    def __init__(self, base, parent=None):
+        super().__init__(parent)
+        self.base = base
+
+    def run(self):
+        try:
+            self.done.emit(updater.fetch_feed(self.base), "")
+        except Exception as e:
+            self.done.emit(None, str(e))
+
+
+class _UpdateDownload(QThread):
+    """Downloads and unpacks a package off the GUI thread, reporting bytes and the result."""
+
+    progress = pyqtSignal(int, int)                # bytes done, bytes total (0 when unknown)
+    done = pyqtSignal(str, str)                    # unpacked folder or "", error text
+
+    def __init__(self, base, feed, parent=None):
+        super().__init__(parent)
+        self.base, self.feed = base, feed
+        self.stop = False
+
+    def run(self):
+        try:
+            folder = tempfile.mkdtemp(prefix="ttskyannot-pkg-")
+            zip_path = updater.download(
+                self.base, self.feed, folder,
+                progress=lambda done, total: self.progress.emit(done, total),
+                should_stop=lambda: self.stop)
+            self.done.emit(updater.unpack(zip_path), "")
+        except Exception as e:
+            self.done.emit("", str(e))
+
+
+class UpdateDialog(FramedDialog):
+    """What the feed says, and the two answers that matter: later, or fetch it and restart into it."""
+
+    def __init__(self, feed, base, parent=None):
+        super().__init__(parent, t("软件更新"))
+        self.feed, self.base = feed, base
+        self.skipped = False
+        self._worker = None
+        self.resize(580, 400)
+        head = QLabel("%s %s  →  %s" % (t("当前版本"), __version__, feed.get("version", "")))
+        head.setObjectName("value")
+        self.body.addWidget(head)
+        size = int(feed.get("size") or 0)
+        if size:
+            self.body.addWidget(QLabel("%s: %.1f MB" % (t("下载大小"), size / 1048576.0)))
+        notes = QPlainTextEdit()
+        notes.setPlainText(str(feed.get("notes") or "").strip())
+        notes.setReadOnly(True)
+        notes.setMinimumHeight(130)
+        self.body.addWidget(notes, 1)
+        self.speed = QLabel()
+        self.speed.setObjectName("note")
+        self.bar = QProgressBar()
+        self.bar.setTextVisible(False)
+        self.bar.setVisible(False)
+        self.speed.setVisible(False)
+        self.body.addWidget(self.bar)
+        self.body.addWidget(self.speed)
+        self.skip_box = _toggle(self, t("跳过这个版本"), False,
+                                t("下次启动不再提示这个版本；仍可用状态栏的「检查更新」手动检查"))
+        self.body.addWidget(self.skip_box)
+        row = QHBoxLayout()
+        row.addStretch(1)
+        self.btn_later = QPushButton(t("稍后"))
+        self.btn_later.clicked.connect(self.reject)
+        self.btn_go = QPushButton(t("立即更新"))
+        self.btn_go.setStyleSheet(BUTTON_QSS)
+        self.btn_go.setDefault(True)
+        self.btn_go.clicked.connect(self._start)
+        row.addWidget(self.btn_later)
+        row.addWidget(self.btn_go)
+        self.body.addLayout(row)
+        if not updater.app_dir():
+            self.btn_go.setEnabled(False)
+            self.btn_go.setToolTip(t("只有打包后的程序才能替换自己。"))
+
+    def reject(self):
+        self.skipped = self.skip_box.isChecked()
+        if self._worker is not None and self._worker.isRunning():
+            self._worker.stop = True
+            self._worker.wait(3000)
+        super().reject()
+
+    def _start(self):
+        if not updater.app_dir():
+            QMessageBox.information(self, "TTSkyAnnot", t("只有打包后的程序才能自动更新。"))
+            return
+        self.btn_go.setEnabled(False)
+        self.btn_later.setEnabled(False)
+        self.skip_box.setEnabled(False)
+        self.bar.setVisible(True)
+        self.speed.setVisible(True)
+        self.bar.setRange(0, 0)
+        config._diag("update: download start %r" % (self.feed.get("version"),))
+        self._worker = _UpdateDownload(self.base, self.feed, self)
+        self._worker.progress.connect(self._progress)
+        self._worker.done.connect(self._ready)
+        self._worker.start()
+
+    def _progress(self, done, total):
+        if total:
+            self.bar.setRange(0, 1000)
+            self.bar.setValue(int(1000.0 * done / total))
+            self.speed.setText("%.1f / %.1f MB" % (done / 1048576.0, total / 1048576.0))
+        else:
+            self.speed.setText("%.1f MB" % (done / 1048576.0))
+
+    def _ready(self, folder, error):
+        self.btn_later.setEnabled(True)
+        config._diag("update: ready folder=%r error=%r" % (folder, error))
+        if error:
+            self.bar.setVisible(False)
+            self.speed.setVisible(False)
+            self.btn_go.setEnabled(True)
+            QMessageBox.warning(self, "TTSkyAnnot", "%s\n\n%s" % (t("更新失败"), error))
+            return
+        try:
+            updater.install_and_restart(folder, updater.app_dir(), os.getpid())
+        except Exception as e:
+            QMessageBox.warning(self, "TTSkyAnnot", "%s\n\n%s" % (t("无法开始更新"), e))
+            return
+        self.accept()
+        QApplication.quit()
 
 
 # ───────────────────────────── main window ─────────────────────────────
@@ -401,7 +2147,7 @@ class MainWindow(QMainWindow):
     def __init__(self, cfg, files=None):
         super().__init__()
         self.cfg = cfg
-        self.setWindowTitle("%s %s" % (t("TTSkyAnnot · 星图查看与标注"), __version__))
+        self.setWindowTitle("%s %s" % (t("TTSkyAnnot · 星图标注"), __version__))
         self.resize(1400, 900)
         self.img = None
         self.wcs = None
@@ -410,13 +2156,38 @@ class MainWindow(QMainWindow):
         self.worker = None
         self.results = {}           # path -> Result
         self.overlay_data = {}      # path -> (shapes, named, grid)
+        self._folder = None         # folder the left-hand list is showing
+        self._folder_dirty = False  # a file was removed or moved: rebuild the list even for the same folder
+        self._previews = {}         # folder -> (names as listed, names worth listing: previews dropped)
+        self._scan = None           # the FolderScan currently reading the folder's picture sizes
+        self._scan_key = None
+        self._file_guard = False    # suppress list signals while the list is rebuilt
+        self._path = None           # file a right-click on a list row refers to
+        self._target_radec = ()     # position of the object picked in the object-name field, if any
+        self._unsaved = set()       # paths solved but not written to disk yet
+        self._loaded_path = None    # file whose picture is on screen (re-reading it cannot keep the view)
+        self._view_state = None     # zoom/position captured by show_image, applied by _loaded
+        self._solved_reload = False # this reload follows a solve: the frame itself is not changing
+        self._slide_timer = QTimer(self)          # automatic playback: one frame per timeout
+        self._slide_timer.setSingleShot(True)
+        self._slide_timer.timeout.connect(self._slide_tick)
+        self._undo_action = None                  # what Ctrl+Z would undo, cleared after a few seconds
+        self._undo_message = ""
+        self._undo_timer = QTimer(self)
+        self._undo_timer.setSingleShot(True)
+        self._undo_timer.timeout.connect(self._expire_undo)
+        self._advancing = False                   # guards the step() that follows a removal
 
         self.view = ImageView()
         self.view.set_placeholder(t("把图片拖到这里,或点「打开」"))
         self.view.moved.connect(self._on_move)
         self.view.files_dropped.connect(self.add_files)
         self.view.zoom_changed.connect(lambda s: self.lbl_zoom.setText("%.0f%%" % (s * 100)))
+        self.view.open_requested.connect(self.open_dialog)
+        self.view.step_requested.connect(self.step)
         self.setCentralWidget(self.view)
+        self._build_image_bar()
+        self._build_list_panel()        # the toolbar picks up this dock's toggle action
         self._build_toolbar()
         self._build_panel()
         self.lbl_pos = QLabel("")
@@ -426,6 +2197,18 @@ class MainWindow(QMainWindow):
         sb.addWidget(self.lbl_info, 1)
         sb.addPermanentWidget(self.lbl_pos)
         sb.addPermanentWidget(self.lbl_zoom)
+        self.btn_update = QToolButton()
+        self.btn_update.setAutoRaise(True)
+        self.btn_update.setText(t("检查更新"))
+        self.btn_update.setToolTip(t("从「设置 → 更新源」检查是否有新版本"))
+        self.btn_update.setCursor(Qt.PointingHandCursor)
+        self.btn_update.clicked.connect(lambda: self.check_updates(manual=True))
+        sb.addPermanentWidget(self.btn_update)
+        self._update_feed = None
+        self._update_check = None
+        self._update_manual = False
+        updater.cleanup_old(updater.app_dir())        # a swap leaves the previous install behind
+        QTimer.singleShot(1500, self._auto_update_check)
         if files:
             self.add_files(files)
 
@@ -444,15 +2227,31 @@ class MainWindow(QMainWindow):
             tb.addAction(a)
             return a
         act(t("打开"), self.open_dialog, QKeySequence.Open)
-        act(t("上一张"), lambda: self.step(-1), Qt.Key_Left)
-        act(t("下一张"), lambda: self.step(1), Qt.Key_Right)
+        # 上一张 / 下一张 / 播放 live on the bar of controls under the picture, not on the toolbar — but their
+        # keys belong to the window, so they stay as actions with shortcuts and no button of their own.
+        self._prev_action = QAction(t("上一张"), self)
+        self._prev_action.setShortcut(QKeySequence(Qt.Key_Left))
+        self._prev_action.triggered.connect(lambda: self.step(-1))
+        self.addAction(self._prev_action)
+        self._next_action = QAction(t("下一张"), self)
+        self._next_action.setShortcut(QKeySequence(Qt.Key_Right))
+        self._next_action.triggered.connect(lambda: self.step(1))
+        self.addAction(self._next_action)
+        self.act_play = QAction(t("播放"), self)
+        self.act_play.setCheckable(True)
+        self.act_play.setShortcut(QKeySequence(Qt.Key_Space))
+        self.act_play.triggered.connect(self._toggle_slideshow)
+        self.act_play.setEnabled(False)            # nothing to play before an image is open
+        self.act_play.setToolTip(t("自动播放当前目录下的所有图片"))
+        self.addAction(self.act_play)
         tb.addSeparator()
         act(t("适应窗口"), self.view.fit, "F")
         act(t("原始大小"), self.view.one_to_one, "1")
         tb.addSeparator()
         tb.addWidget(QLabel(" %s " % t("拉伸")))
         self.cmb_stretch = QComboBox()
-        for code, name in (("auto", t("自动")), ("linked", t("联动")), ("unlinked", t("分通道")), ("none", t("不拉伸"))):
+        for code, name in (("auto", t("自动")), ("awb", t("自动白平衡")), ("linked", t("联动")),
+                           ("pedestal", t("去底色")), ("unlinked", t("分通道")), ("none", t("不拉伸"))):
             self.cmb_stretch.addItem(name, code)
         self.cmb_stretch.setCurrentIndex(max(0, self.cmb_stretch.findData(self.cfg.get("stretch", "auto"))))
         self.cmb_stretch.currentIndexChanged.connect(self._stretch_changed)
@@ -461,35 +2260,246 @@ class MainWindow(QMainWindow):
         self.act_overlay = act(t("显示标注"), self._toggle_overlay, "A", checkable=True)
         self.act_overlay.setChecked(bool(self.cfg.get("show_overlay", True)))
         act(t("文件头"), self.show_header, "H")
+        act(t("修正文件头"), self.fix_header)
+        act(t("直方图"), self.show_histogram, "L")
+        act(t("撤销删除或移动"), self.undo_last, QKeySequence.Undo)
+        # The image bar's ✖ promises the Delete key in its tooltip; the key itself belongs to the window, not
+        # to that button (which never takes focus), so it gets its own action — and no toolbar button of its own.
+        self._del_action = QAction(t("删除当前图像（会先确认，删后可撤销）"), self)
+        self._del_action.setShortcut(QKeySequence(Qt.Key_Delete))
+        self._del_action.triggered.connect(self.delete_current)
+        self.addAction(self._del_action)
         tb.addSeparator()
         act(t("设置"), self.settings)
+        tb.addSeparator()
+        tb.addAction(self._files_action)           # show/hide the left-hand folder list
+        tb.addAction(self._bar_action)             # show/hide the bar of screening controls
+
+    def _build_image_bar(self):
+        """The bar of screening controls along the bottom edge of the picture: prev / play / next to look
+        through a folder, then remove or move the frames that do not make the cut. It floats over the image,
+        so the toolbar switch can hide it for a clean look at a picture."""
+        bar = QFrame(self.view)
+        bar.setObjectName("imageBar")
+        lay = QHBoxLayout(bar)
+        lay.setContentsMargins(6, 4, 6, 4)
+        lay.setSpacing(2)
+
+        def add(glyph, tip, slot, key=None, checkable=False):
+            b = QToolButton(bar)
+            b.setText(glyph)
+            b.setToolTip("%s%s" % (t(tip), "  (%s)" % key if key else ""))
+            b.setCursor(Qt.PointingHandCursor)
+            b.setFixedSize(30, 30)
+            b.setFocusPolicy(Qt.NoFocus)           # keys keep working in the viewer
+            b.setCheckable(checkable)
+            b.clicked.connect(slot)
+            lay.addWidget(b)
+            return b
+
+        sep = lambda: lay.addWidget(self._bar_separator(bar))   # noqa: E731
+        self.btn_prev = add("⏴", "上一张", lambda: self.step(-1), "←")
+        self.btn_play = add("▶", "播放", self._toggle_slideshow, "空格", checkable=True)
+        self.btn_next = add("⏵", "下一张", lambda: self.step(1), "→")
+        sep()
+        self.btn_del = add("✖", "删除当前图像（会先确认，删后可撤销）", self.delete_current, "Delete")
+        self.btn_move = add("➜", "把当前图像移动到…", self.move_current)
+        self.view.set_image_bar(bar)
+        self.image_bar = bar
+
+        a = QAction(t("图像操作栏"), self)
+        a.setCheckable(True)
+        a.setChecked(bool(self.cfg.get("show_image_bar", True)))
+        a.setToolTip(t("显示或隐藏画面底部的操作栏（上一张/播放/下一张/删除/移动）"))
+        a.toggled.connect(self._toggle_image_bar)
+        self._bar_action = a
+
+    def _bar_separator(self, parent):
+        f = QFrame(parent)
+        f.setFrameShape(QFrame.VLine)
+        f.setObjectName("barSep")                  # styled by BAR_QSS, so a live theme change repaints it
+        f.setFixedWidth(1)
+        return f
+
+    def _toggle_image_bar(self, on):
+        self.cfg["show_image_bar"] = bool(on)
+        self._update_bar()
+
+    def _update_bar(self):
+        """Keep the bottom bar in step with the folder: what it can act on, and the play button's state."""
+        on = bool(self.cfg.get("show_image_bar", True))
+        self._bar_action.setChecked(on)
+        files, i = self._folder_files()
+        has_image = self.img is not None
+        if hasattr(self, "image_bar"):
+            self.image_bar.setVisible(on and has_image and not self.view._empty)
+            self.view._place_nav()
+        if hasattr(self, "btn_prev"):
+            for b in (self.btn_prev, self.btn_next):
+                b.setEnabled(len(files) > 1)
+            self.btn_del.setEnabled(has_image)
+            self.btn_move.setEnabled(has_image)
+            self.btn_play.setEnabled(has_image and i >= 0)
+
+
+    def _build_list_panel(self):
+        """Left-hand list of the images in the current folder. The dock can be floated, closed or re-shown
+        from the toolbar (dock.toggleViewAction())."""
+        dock = QDockWidget(t("文件夹"), self)
+        dock.setFeatures(QDockWidget.DockWidgetMovable | QDockWidget.DockWidgetFloatable |
+                         QDockWidget.DockWidgetClosable)
+        w = QWidget()
+        lay = QVBoxLayout(w)
+        lay.setContentsMargins(6, 6, 6, 6)
+        lay.setSpacing(5)
+        self.lbl_folder = QLabel("")
+        self.lbl_folder.setWordWrap(True)
+        self.lbl_folder.setToolTip(t("同目录下的图片"))
+        lay.addWidget(self.lbl_folder)
+        self.file_list = QListWidget()
+        self.file_list.setToolTip(t("同目录下的图片"))
+        self.file_list.setStyleSheet(_list_qss(self))
+        self.file_list.currentRowChanged.connect(self._file_row_changed)
+        self.file_list.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.file_list.customContextMenuRequested.connect(
+            lambda pos: self._list_menu(pos, self.file_list))
+        lay.addWidget(self.file_list, 1)
+        dock.setWidget(w)
+        dock.setMinimumWidth(268)                  # wide enough for the rows without a scroll bar
+        self.addDockWidget(Qt.LeftDockWidgetArea, dock)
+        self.dock_files = dock
+        self._files_action = dock.toggleViewAction()
+        self._files_action.setText(" " + t("文件夹") + " ")
+        self._files_action.setToolTip(t("显示或隐藏左侧的同目录图片列表"))
 
     def _build_panel(self):
+        """The annotation panel: the queue at the top, then what to annotate, then what to write, then the
+        two actions. Sections are headed by an accent label and the controls sit in a fixed-width column, so
+        the panel does not look ragged when it is widened."""
         dock = QDockWidget(t("标注"), self)
         dock.setFeatures(QDockWidget.DockWidgetMovable | QDockWidget.DockWidgetFloatable)
         w = QWidget()
+        w.setStyleSheet(PANEL_QSS)
         lay = QVBoxLayout(w)
+        lay.setContentsMargins(8, 8, 8, 8)
+        lay.setSpacing(5)
+
+        def heading(text, bar=False):
+            """A group heading. `bar` draws it as the design's section stripe, used for the queue at the top
+            of the panel; the rest are quiet captions, so only one element shouts on the panel."""
+            lb = QLabel(t(text))
+            if bar:
+                lb.setStyleSheet(SUBTITLE_QSS)
+            else:
+                lb.setObjectName("section")        # styled by PANEL_QSS
+            lay.addWidget(lb)
+            return lb
+
+        self.lbl_queue = heading("打开历史", bar=True)
+        self.lbl_queue.setToolTip(t("打开过的图片会按顺序记在这里，之后可以一起解析；在左栏点选或翻页看过的图"
+                                    "也会自动加进来"))
         self.list = QListWidget()
         self.list.setSelectionMode(QAbstractItemView.ExtendedSelection)
+        self.list.setStyleSheet(_list_qss(self))
         self.list.currentRowChanged.connect(self._row_changed)
-        lay.addWidget(self.list, 2)
+        self.list.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.list.customContextMenuRequested.connect(lambda pos: self._list_menu(pos, self.list))
+        # four rows is the least that reads as a history rather than a stray box; the queue is the panel's
+        # main object, so it takes the spare height ahead of the log below it
+        self.list.setMinimumHeight(4 * _list_row_height(self.list) + 10)
+        lay.addWidget(self.list, 5)                # the queue takes the panel's spare height
+
+        # one column of controls, laid out from the left edge so it keeps its shape at any dock width
+        self.controls = QVBoxLayout()
+        self.controls.setContentsMargins(0, 0, 0, 0)
+        self.controls.setSpacing(0)                # the section headings bring their own spacing
+
+        def gap(height=SECTION_GAP):
+            """Air between two blocks in this column.
+
+            The column runs at zero spacing and the section headings carry their own top padding, which keeps
+            every heading equally far from what precedes it. Blocks that have no heading above them — the shape
+            row and the catalogue heading — would otherwise sit flush against their neighbour, so they ask for
+            the same gap explicitly.
+            """
+            w = QWidget()
+            w.setFixedHeight(height)
+            w.setAttribute(Qt.WA_TranslucentBackground)
+            self.controls.addWidget(w)
+            return w
+
+        forms = QFormLayout()
+        forms.setContentsMargins(0, 0, 0, 0)
+        forms.setSpacing(6)
+        forms.setLabelAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        forms.setFieldGrowthPolicy(QFormLayout.FieldsStayAtSizeHint)
         self.ed_target = QLineEdit()
-        self.ed_target.setPlaceholderText(t("目标名(可选)"))
-        self.ed_target.setToolTip(t("例如 M31。没有文件头的 JPG/PNG 盲解失败时填它"))
-        lay.addWidget(self.ed_target)
-        lay.addWidget(QLabel(t("标注内容")))
+        self.ed_target.setMinimumWidth(150)
+        self.ed_target.setPlaceholderText(t("天体名(可选，可搜索)"))
+        self.ed_target.setToolTip(t("输入 M57、NGC6720、Ring、6720 都能找到；选中后用它在天球上的准确位置"
+                                    "做解析提示，比文件头里的指向更可靠"))
+        self._make_target_completer()
+        forms.addRow(t("天体名"), self.ed_target)
+        self.ed_coord = QLineEdit()
+        self.ed_coord.setMinimumWidth(150)
+        self.ed_coord.setPlaceholderText("05 34 31.9  +22 00 52")
+        self.ed_coord.setToolTip(t("直接输入画面中心的赤经/赤纬（时 分 秒、度 分 秒），优先于天体名用作解析提示；"
+                                   "例：05 34 31.9 +22 00 52，也接受 05:34:31.9 +22:00:52"))
+        self.ed_coord.editingFinished.connect(self._coord_entered)
+        forms.addRow(t("中心坐标"), self.ed_coord)
+        lay.addLayout(forms)
+
+        heading("标注内容")
+        # What the colours on the picture mean; each object also takes a shade of its own inside the family.
+        legend = QLabel("&nbsp;&nbsp;".join(
+            "<span style='color:%s'>●</span> %s" % (style.CATEGORY_COLORS[k], t(name))
+            for k, name in (("galaxy", "星系"), ("nebula", "星云"), ("cluster", "星团"), ("dark", "暗星云"))))
+        legend.setTextFormat(Qt.RichText)
+        legend.setObjectName("note")
+        legend.setToolTip(t("颜色按天体类型：同一类型里的每个天体再取属于自己的深浅"))
+        lay.addWidget(legend)
         self.chk_groups = {}
-        saved = self.cfg.get("groups")
-        grid_lay = QGridLayout()
-        grid_lay.setContentsMargins(0, 0, 0, 0)
-        for i, (key, text) in enumerate(GROUPS):
-            c = QCheckBox(t(text))
-            c.setChecked(True if saved is None else key in saved)
+        saved = self.cfg.get("groups")              # None = never saved: everything starts on
+        # the star names and the grid are not catalogues, so they are not part of the precedence list and are
+        # switched separately. "grid" and "named" keep their historical config keys.
+        #
+        # An older config carries type keys ("galaxy", "nebula") and no catalogue key at all; taking that
+        # literally would start the program with nothing switched on, so an unrecognised value means "all on".
+        fresh = saved is None or not any(k in saved for k, _t in GROUPS)
+
+        def is_on(key):
+            return fresh or key in saved
+        role_col = QVBoxLayout()
+        role_col.setContentsMargins(0, 0, 0, 0)
+        role_col.setSpacing(5)
+        for i in range(0, len(GROUPS), 3):          # three per row: the labels are short
+            row = QHBoxLayout()
+            row.setSpacing(5)
+            for key, text in GROUPS[i:i + 3]:
+                c = _toggle(w, t(text), is_on(key))
+                c.setStyleSheet(TOGGLE_QSS)
+                c.setToolTip(t(catalogue.NOTES[key]))
+                c.toggled.connect(self._groups_changed)
+                self.chk_groups[key] = c
+                row.addWidget(c)                   # natural width: the pills hug their own text
+            row.addStretch(1)                      # and the row stays left-aligned
+            role_col.addLayout(row)
+        extras = QHBoxLayout()
+        extras.setSpacing(5)
+        self.chk_extra = {}
+        for key, text in (("named", "亮星名"), ("grid", "坐标网格")):
+            c = _toggle(w, t(text), is_on(key))     # on by default, same as the catalogues
+            c.setStyleSheet(TOGGLE_QSS)
+            c.setToolTip(t("和星表无关，单独开关；默认开启"))
             c.toggled.connect(self._groups_changed)
-            self.chk_groups[key] = c
-            grid_lay.addWidget(c, i // 2, i % 2)
-        lay.addLayout(grid_lay)
+            self.chk_extra[key] = c
+            extras.addWidget(c)
+        extras.addStretch(1)
+        role_col.addLayout(extras)
+        self.controls.addLayout(role_col)
+        gap()
         row = QHBoxLayout()
+        row.setSpacing(8)
         row.addWidget(QLabel(t("天体形状")))
         self.cmb_shape = QComboBox()
         for text, key in (("轮廓线", "outline"), ("圆圈", "circle")):
@@ -498,22 +2508,101 @@ class MainWindow(QMainWindow):
         self.cmb_shape.setToolTip(t("轮廓线：有轮廓数据的星云按实际形状描边。圆圈：一律按星表尺寸画圆，长条形天体画成椭圆。"))
         self.cmb_shape.currentIndexChanged.connect(self._shape_changed)
         row.addWidget(self.cmb_shape, 1)
-        lay.addLayout(row)
-        lay.addWidget(QLabel(t("输出")))
+        self.controls.addLayout(row)
+        gap()
+
+        # The colours of a one-shot colour sensor, for a frame whose header does not say which arrangement it
+        # used. Only meaningful for a single-channel mosaic, so it stays disabled until one is on screen:
+        # applying it to an RGB frame would reinterpret colour that is already there.
+        row = QHBoxLayout()
+        row.setSpacing(8)
+        self.lbl_bayer = QLabel(t("拜耳阵列"))
+        row.addWidget(self.lbl_bayer)
+        self.cmb_bayer = QComboBox()
+        self.cmb_bayer.addItem(t("自动（按文件头）"), "auto")
+        for key in debayer.PATTERNS:
+            self.cmb_bayer.addItem(t(debayer.PATTERN_LABELS[key]), key)
+        self.cmb_bayer.setCurrentIndex(
+            max(0, self.cmb_bayer.findData(self.cfg.get("bayer_pattern", "auto"))))
+        self.cmb_bayer.setToolTip(t("彩色相机的未解拜耳帧如果文件头没写拜耳排列，就在这里指定。\n"
+                                    "只对单通道的彩色马赛克帧生效；已经解拜耳或本来就是单色的帧不受影响。"))
+        self.cmb_bayer.currentIndexChanged.connect(self._bayer_changed)
+        row.addWidget(self.cmb_bayer, 1)
+        self.controls.addLayout(row)
+        gap()
+        head = QHBoxLayout()                       # 星表 heading with the select all / none shortcut
+        head.setSpacing(6)
+        self.lbl_cats = QLabel(t("星表"))
+        self.lbl_cats.setObjectName("section")
+        head.addWidget(self.lbl_cats)
+        head.addStretch(1)
+        for text, on in (("全选", True), ("清空", False)):
+            link = QToolButton()
+            link.setText(t(text))
+            link.setCursor(Qt.PointingHandCursor)
+            link.setFocusPolicy(Qt.NoFocus)
+            link.setAutoRaise(True)
+            link.setToolTip(t("全部解析") if on else t("一个都不解析"))
+            link.setObjectName("link")             # PANEL_QSS colours it, so it follows a live theme change
+            link.clicked.connect(lambda _=False, v=on: self._cats_all(v))
+            head.addWidget(link)
+        self.controls.addLayout(head)
+        self.chk_cats = {}
+        saved_cats = self.cfg.get("cats")
+        saved_cats = list(vizier.CATALOGS) if saved_cats is None else list(saved_cats)
+        cat_row = QHBoxLayout()
+        cat_row.setSpacing(6)
+        for key, spec in vizier.CATALOGS.items():
+            c = _toggle(w, spec["label"], key in saved_cats,
+                        t("解析后写出 %s 星表（不勾就不查询、不写出）") % spec["block"])
+            c.setStyleSheet(TOGGLE_QSS)
+            c.toggled.connect(self._cats_changed)
+            self.chk_cats[key] = c
+            cat_row.addWidget(c)
+        cat_row.addStretch(1)
+        self.controls.addLayout(cat_row)
+        self.controls.addSpacing(5)
+        self.lbl_named = QLabel(t("亮星表（NamedStars）始终写出"))
+        self.lbl_named.setObjectName("note")
+        self.lbl_named.setWordWrap(True)           # it sits under the row, not beside it
+        self.controls.addWidget(self.lbl_named)
+        self.controls.addSpacing(3)
+        self._cats_changed()                       # show the count from the start
+
+        heading("输出")
         self.chk = {}
-        for key, text in (("write_txt", "天体列表 TXT(PixInsight 格式)"), ("write_preview", "标注预览图"),
-                          ("write_outlines", "轮廓坐标文件"), ("write_wcs", "解析结果写回图片")):
-            c = QCheckBox(t(text))
-            c.setChecked(bool(self.cfg.get(key, True)))
-            if key == "write_wcs":
-                c.setToolTip(t("写回会修改原文件的文件头(像素不动)。FITS/XISF 写进文件头,JPG/PNG/TIFF 另存同名 .wcs 文件。"))
+        out_grid = QGridLayout()                   # two across: four switches in four rows made the panel tall
+        out_grid.setContentsMargins(0, 0, 0, 0)
+        out_grid.setHorizontalSpacing(6)
+        out_grid.setVerticalSpacing(5)
+        for i, (key, text, tip) in enumerate((
+                ("write_txt", "天体列表 TXT", "PixInsight 格式的天体列表，存在图片旁边"),
+                ("write_preview", "标注图", "带标注的预览图，另存为 *_annotated.jpg"),
+                ("write_outlines", "轮廓坐标文件", ""),
+                ("write_wcs", "解析结果写回图片",
+                 "写回会修改原文件的文件头(像素不动)。FITS/XISF 写进文件头,JPG/PNG/TIFF 另存同名 .wcs 文件。"))):
+            c = _toggle(w, t(text), bool(self.cfg.get(key, True)), t(tip) if tip else "")
+            c.setStyleSheet(TOGGLE_QSS)
             self.chk[key] = c
-            lay.addWidget(c)
+            out_grid.addWidget(c, i // 2, i % 2, Qt.AlignLeft)
+        self.controls.addLayout(out_grid)
+
+        lay.addLayout(self.controls)
+        lay.addSpacing(8)                          # a little air before the actions
         self.btn_start = QPushButton(t("解析并标注"))
-        self.btn_start.setStyleSheet("QPushButton{background:%s;color:#06140D;font-weight:600;padding:7px;"
-                                     "border-radius:4px} QPushButton:disabled{background:#2A3A33;color:#6C7A73}" % ACCENT)
+        self.btn_start.setStyleSheet(BUTTON_QSS)
         self.btn_start.clicked.connect(self.start)
         lay.addWidget(self.btn_start)
+        self.btn_save = QPushButton(t("保存当前结果"))
+        self.btn_save.setToolTip(t("把这张图的解析结果写到磁盘（解析本身不写任何文件）"))
+        self.btn_save.clicked.connect(self.save_current)
+        self.btn_save.setEnabled(False)
+        lay.addWidget(self.btn_save)
+        self.btn_pi = QPushButton(t("在 PixInsight 中打开"))
+        self.btn_pi.setToolTip(t("用 PixInsight 打开当前显示的原图（XISF/FITS 保留文件头，不做任何改动）"))
+        self.btn_pi.clicked.connect(self.open_in_pixinsight)
+        self.btn_pi.setEnabled(False)                  # nothing to open before an image is shown
+        lay.addWidget(self.btn_pi)
         self.prog = QProgressBar()
         self.prog.setRange(0, 1000)
         self.prog.setTextVisible(False)
@@ -528,8 +2617,9 @@ class MainWindow(QMainWindow):
         self.btn_folder.setEnabled(False)
         lay.addWidget(self.btn_folder)
         dock.setWidget(w)
-        dock.setMinimumWidth(320)
+        dock.setMinimumWidth(296)
         self.addDockWidget(Qt.RightDockWidgetArea, dock)
+        self.dock_annotate = dock
 
     # ---- files ----------------------------------------------------------
     def open_dialog(self):
@@ -539,8 +2629,10 @@ class MainWindow(QMainWindow):
         if paths:
             self.add_files(paths)
 
-    def add_files(self, paths):
-        paths = [os.path.abspath(p) for p in paths if os.path.splitext(p)[1].lower() in imageio.SUPPORTED]
+    def add_files(self, paths, select=True):
+        """Add files to the annotation queue. select=False only queues them: the caller (the left-hand list,
+        the ‹ / › buttons) does the showing itself."""
+        paths = [os.path.abspath(p) for p in paths if os.path.splitext(p)[1].lower() in _SUPPORTED]
         if not paths:
             return
         existing = [self.list.item(i).data(Qt.UserRole) for i in range(self.list.count())]
@@ -557,41 +2649,203 @@ class MainWindow(QMainWindow):
             if first_row is None:
                 first_row = row
         self.cfg["last_dir"] = os.path.dirname(paths[0])
-        self.list.setCurrentRow(first_row)
+        if select:
+            self.list.setCurrentRow(first_row)
 
     def _row_changed(self, row):
         if row >= 0:
             self.show_image(self.list.item(row).data(Qt.UserRole))
 
-    def step(self, d):
-        """Previous / next supported image in the current image's folder."""
-        if not self.current:
-            return
-        folder = os.path.dirname(self.current)
-        files = sorted(f for f in os.listdir(folder) if os.path.splitext(f)[1].lower() in imageio.SUPPORTED
-                       and not f.endswith(".annotated.jpg"))
-        try:
-            i = files.index(os.path.basename(self.current))
-        except ValueError:
-            return
-        j = i + d
-        if 0 <= j < len(files):
-            self.add_files([os.path.join(folder, files[j])])
+    # ---- right-click menu on a listed file -------------------------------
+    def _list_menu(self, pos, widget):
+        """Right-click a row of either list: locate the file in Explorer or copy its full path."""
+        it = widget.itemAt(pos)
+        if it is None:
+            return                                           # a click below the last row: no target
+        path = it.data(Qt.UserRole) or it.text()
+        menu = QMenu(self)
+        act_show = menu.addAction(t("在文件资源管理器中显示"))
+        act_copy = menu.addAction(t("复制文件完整路径"))
+        menu.addSeparator()
+        act_dir = menu.addAction(t("复制所在文件夹路径"))
+        chosen = menu.exec_(widget.viewport().mapToGlobal(pos))
+        if chosen is act_show:
+            # via the shell API rather than `explorer /select,...`: that relies on explorer.exe re-parsing an
+            # argument full of commas, spaces and backslashes, and opens Documents when the parse fails
+            if not reveal.reveal(path):
+                self.logbox.appendPlainText("%s %s" % (t("无法在文件资源管理器中定位"), path))
+        elif chosen is act_copy:
+            QApplication.clipboard().setText(os.path.normpath(path))
+        elif chosen is act_dir:
+            QApplication.clipboard().setText(os.path.dirname(os.path.normpath(path)))
 
-    def show_image(self, path, keep_view=False):
+    # ---- the image's folder (left-hand list and the ‹ / › buttons) -------
+    def _folder_files(self):
+        """(image files in the current image's folder, index of the current one) — annotated previews and the
+        small previews written beside each frame are skipped so they do not show up as pictures of their own.
+
+        The previews the ASIAIR names `..._thn.jpg` are left out here, by name, before anything is shown; the
+        background scan then drops any other preview by comparing picture sizes."""
+        if not self.current:
+            return [], -1
+        folder = os.path.dirname(self.current)
+        try:
+            names = sorted(f for f in os.listdir(folder) if os.path.splitext(f)[1].lower() in _SUPPORTED
+                           and not f.endswith(".annotated.jpg") and not imageio.preview_name(f))
+        except OSError:
+            return [], -1
+        shown = self._without_previews(folder, names)
+        try:
+            return shown, shown.index(os.path.basename(self.current))
+        except ValueError:
+            return shown, -1
+
+    def _without_previews(self, folder, names):
+        """The names to list: the frames, without the low-resolution previews beside them.
+
+        The first answer for a folder comes from a background scan, because reading the size of every file can
+        take a couple of seconds on a slow or networked disk; until it arrives every file is listed."""
+        hit = self._previews.get(folder)
+        if hit and hit[0] == tuple(names):
+            return list(hit[1])
+        key = (folder, tuple(names))
+        if self._scan is None or self._scan_key != key:
+            if self._scan is not None and self._scan.isRunning():
+                return list(names)                 # one scan at a time; this folder waits for the next pass
+            self._scan_key = key
+            self._scan = FolderScan(folder, names, self)
+            self._scan.done.connect(self._previews_found)
+            self._scan.start()
+        return list(names)
+
+    def _previews_found(self, folder, names, kept):
+        """A folder's sizes are known: remember them and rebuild the list from whatever is on screen.
+
+        The rebuild matters even when the scan was for another folder: a scan blocks new ones while it runs, so
+        the folder the user switched to in the meantime gets its own scan started by this pass."""
+        self._previews[folder] = (tuple(names), list(kept))
+        self._folder_dirty = True                  # the rows changed: refresh_folder must rebuild them
+        self.refresh_folder()
+
+    def refresh_folder(self):
+        """Fill the left-hand list from the current image's folder and leave the rest of the window alone."""
+        files, i = self._folder_files()
+        folder = os.path.dirname(self.current) if self.current else ""
+        if folder != self._folder or self._folder_dirty:
+            self._folder, self._folder_dirty = folder, False
+            self._file_guard = True                    # setCurrentRow below must not load the image again
+            try:
+                self.file_list.clear()
+                for n in files:
+                    it = QListWidgetItem(n)
+                    it.setData(Qt.UserRole, os.path.join(folder, n))
+                    it.setToolTip(os.path.join(folder, n))
+                    self.file_list.addItem(it)
+                self.file_list.setCurrentRow(i if i >= 0 else -1)
+            finally:
+                self._file_guard = False
+        elif self.file_list.currentRow() != i:
+            self._file_guard = True
+            try:
+                self.file_list.setCurrentRow(i)
+            finally:
+                self._file_guard = False
+        self.lbl_folder.setText(os.path.basename(folder) if folder
+                                else t("把图片拖到这里,或点「打开」"))
+        self.lbl_folder.setToolTip(folder or "")
+        if hasattr(self, "act_play"):
+            self.act_play.setEnabled(i >= 0 and self.img is not None)   # playback needs a folder
+        if hasattr(self, "btn_pi"):
+            self.btn_pi.setEnabled(self.img is not None)
+        self._update_save_button()
+        self._update_bar()
+
+    def _file_row_changed(self, row):
+        """A click in the left-hand list shows that image (it also joins the annotation queue)."""
+        if self._file_guard or row < 0:
+            return
+        p = self.file_list.item(row).data(Qt.UserRole)
+        self.add_files([p], select=False)          # already on screen: do not reload through the queue
+        self.show_image(p)
+
+    # ---- automatic playback ---------------------------------------------
+    def _toggle_slideshow(self, on):
+        """The ▶ buttons (toolbar and image bar): step through the folder on its own until switched off.
+        Either button can drive it, so both are kept in step here."""
+        self.act_play.setText(t("暂停") if on else t("播放"))
+        self.act_play.setToolTip(t("每隔几秒自动切换到下一张") if on else t("自动播放当前目录下的所有图片"))
+        self.act_play.setChecked(bool(on))
+        if hasattr(self, "btn_play"):               # the two buttons are one function
+            self.btn_play.setChecked(bool(on))
+            self.btn_play.setText("⏸" if on else "▶")
+            self.btn_play.setToolTip(t("暂停") if on else t("播放"))
+        self._slide_timer.stop()
+        if on:
+            self._slide_show_next()
+
+    def _stop_slideshow(self):
+        """Leaving the window: switch playback off without touching the timer's running state."""
+        if self.act_play.isChecked():
+            self.act_play.setChecked(False)        # triggers _toggle_slideshow(False)
+        self._slide_timer.stop()
+
+    def _slide_show_next(self):
+        """Arm the next frame. Anything can interrupt playback: closing the window, switching to an image in
+        another folder, or clicking ▶ again. The frame is only armed while the picture already on screen has
+        finished loading, so the pause stays a real pause on slow frames."""
+        if not self.act_play.isChecked() or self.worker is not None and self.worker.isRunning():
+            return
+        _files, i = self._folder_files()
+        if i < 0:
+            return
+        self._slide_timer.start(max(300, int(float(self.cfg.get("slide_interval", 2.0)) * 1000)))
+
+    def _slide_tick(self):
+        if self.act_play.isChecked():
+            self.step(1)
+
+    def step(self, d):
+        """Previous / next image in the current image's folder (wraps around at the ends, so neither button
+        is ever a dead end)."""
+        if self._advancing:
+            return
+        files, i = self._folder_files()
+        if i < 0 or len(files) < 2:
+            return
+        j = (i + d) % len(files)
+        p = os.path.join(self._folder or os.path.dirname(self.current), files[j])
+        self.add_files([p], select=False)
+        self.show_image(p)
+
+    def show_image(self, path):
+        """Start loading an image. The zoom and position of whatever is on screen are captured first and put
+        back by _loaded when the new picture has the same display size, so frames can be compared around the
+        same detail; a different size or shape falls back to fitting the frame."""
+        if path != self.current and os.path.dirname(path) != (self._folder or ""):
+            self._folder = None                        # a different folder: rebuild the list
+            self._folder_dirty = True
         self.current = path
         self.lbl_info.setText(t("正在读取…") + " " + os.path.basename(path))
-        self._keep_view = keep_view
-        ld = LoadWorker(path, self.cmb_stretch.currentData(), self)
+        self.view.set_loading(True)
+        # re-reading the same frame (after solving, or a solved one refreshed) cannot keep the view: the
+        # displayed copy may have just been built from the same pixels but the scroll position is stale
+        same = path == self._loaded_path or self._solved_reload
+        self._solved_reload = False
+        self._view_state = None if same else self.view._view_state()
+        self.loader = ld = LoadWorker(path, self.cmb_stretch.currentData(),
+                                      bool(self.cfg.get("debayer", True)),
+                                      self.cfg.get("bayer_pattern", "auto"), self)
         ld.done.connect(self._loaded)
-        self.loader = ld
         ld.start()
 
     def _loaded(self, out):
         if out["path"] != self.current:
             return                                  # a newer request superseded this one
+        self.view.set_loading(False)                # this frame is on screen (or failed): see below
         if "error" in out:
             self.lbl_info.setText("%s: %s" % (t("读取失败"), out["error"]))
+            self.refresh_folder()                   # keep the highlight and the ‹ / › buttons in step
+            self._slide_show_next()                 # a broken frame must not end playback
             return
         self.img = out["img"]
         res = self.results.get(out["path"])
@@ -600,44 +2854,118 @@ class MainWindow(QMainWindow):
             self.overlay_data[out["path"]] = (res.shapes, res.named, res.grid)
         elif out.get("wcs") is not None:
             self.overlay_data[out["path"]] = (out.get("shapes"), out.get("named"), out.get("grid"))
-        self.view.set_image(out["qimage"], keep_view=getattr(self, "_keep_view", False))
+        # keep zoom and position across frames of the same size (see ImageView._view_state)
+        state = self._view_state
+        if state is not None and state[0] != (out["qimage"].width(), out["qimage"].height()):
+            state = None
+        self._view_state = None
+        self._loaded_path = out["path"]
+        self.view.set_image(out["qimage"], view=state)
         self._refresh_overlay()
+        self._update_bayer_control()
         im = self.img
-        mode_name = {"linked": t("联动"), "unlinked": t("分通道"), "none": t("不拉伸")}.get(out.get("mode"), "")
+        mode_name = {"linked": t("联动"), "unlinked": t("分通道"), "none": t("不拉伸"),
+                     "awb": t("自动白平衡"), "pedestal": t("去底色")}.get(out.get("mode"), "")
         stretch_txt = ("%s: %s%s" % (t("拉伸"), t("自动") + " → " if self.cmb_stretch.currentData() == "auto" else "",
                                      mode_name)) if im.linear else ""
-        self.lbl_info.setText("%s   %d × %d   %s%s   %s   %s" % (
-            os.path.basename(im.path), im.width, im.height, im.fmt.upper(),
-            "  (linear)" if im.linear else "", t("已解析") if self.wcs is not None else t("未解析"), stretch_txt))
+        # say what kind of colour the frame is, and that a mosaic was interpolated on the way in
+        if im.debayered:
+            colour_txt = "%s %s → %s" % (t("彩色"), im.debayered, t("已解拜耳"))
+        elif im.is_color:
+            colour_txt = t("彩色")
+        else:
+            colour_txt = t("单色")
+        self.lbl_info.setText("%s   %d × %d   %s   %s%s   %s   %s" % (
+            os.path.basename(im.path), im.width, im.height, im.fmt.upper(), colour_txt,
+            ("  (linear)" if im.linear else
+             ("  " + t("已拉伸") if not imageio.plain_raster(im) else "")),
+            t("已解析") if self.wcs is not None else t("未解析"),
+            stretch_txt))
         self.setWindowTitle("%s — TTSkyAnnot" % os.path.basename(im.path))
+        self.refresh_folder()                      # left-hand list and the ‹ / › buttons follow the folder
+        if self._undo_message:                     # a removal is still undoable: say so instead
+            self.lbl_info.setText(self._undo_hint())
+        self._slide_show_next()                    # playback waits for the frame to be ready
 
     def _stretch_changed(self):
         self.cfg["stretch"] = self.cmb_stretch.currentData()
         if self.current:
-            self.show_image(self.current, keep_view=True)
+            self._solved_reload = True                 # the frame itself is unchanged: keep it fitted
+            self.show_image(self.current)
 
     def _groups_on(self):
-        return {k for k, c in self.chk_groups.items() if c.isChecked()}
+        """The enabled deep-sky catalogues, in precedence order."""
+        return tuple(k for k, _t in GROUPS if self.chk_groups[k].isChecked())
+
+    def _extras_on(self):
+        return {k for k, c in self.chk_extra.items() if c.isChecked()}
 
     def _groups_changed(self):
-        self.cfg["groups"] = sorted(self._groups_on())
+        """Save what is switched on: the precedence list in order, then the two non-catalogue switches."""
+        self.cfg["groups"] = list(self._groups_on()) + sorted(self._extras_on())
         self._refresh_overlay()
+
+    def _cats_on(self):
+        return tuple(k for k in vizier.CATALOGS if self.chk_cats[k].isChecked())
+
+    def _cats_changed(self):
+        """Which star catalogues take part: what is switched off is not even queried."""
+        self.cfg["cats"] = list(self._cats_on())
+        self.lbl_cats.setText("%s (%d/%d)" % (t("星表"), len(self.cfg["cats"]), len(vizier.CATALOGS)))
+
+    def _cats_all(self, on):
+        for c in self.chk_cats.values():
+            c.blockSignals(True)
+            c.setChecked(on)
+            c.blockSignals(False)
+        self._cats_changed()
 
     def _shape_changed(self):
         self.cfg["shape_style"] = self.cmb_shape.currentData()
         self._refresh_overlay()
 
+    def _bayer_changed(self):
+        """Remember the choice and reload: the pattern changes how the frame is interpolated, so it has to be
+        read again rather than just redrawn."""
+        self.cfg["bayer_pattern"] = self.cmb_bayer.currentData()
+        if self.current and self.img is not None and self.img.can_choose_bayer:
+            self.show_image(self.current)
+
+    def _update_bayer_control(self):
+        """Only single-channel data can have its arrangement chosen; anything else is left alone, and the
+        control says why rather than sitting there looking usable."""
+        if not hasattr(self, "cmb_bayer"):
+            return
+        usable = self.img is None or self.img.can_choose_bayer
+        self.cmb_bayer.setEnabled(usable)
+        self.lbl_bayer.setEnabled(usable)
+        if usable and self.img is not None and not self.img.is_bayer_mosaic:
+            hint = t("这张是单通道图像、文件头也没写拜耳排列。如果它其实是彩色相机的未解拜耳帧，"
+                     "在这里指定排列即可解出彩色。")
+        elif usable:
+            hint = t("彩色相机的未解拜耳帧如果文件头没写拜耳排列，就在这里指定。\n"
+                     "只对单通道的彩色马赛克帧生效；已经解拜耳或本来就是单色的帧不受影响。")
+        else:
+            hint = t("当前图像不是未解拜耳的彩色马赛克帧，这个选项对它无效。")
+        self.cmb_bayer.setToolTip(hint)
+
     def _toggle_overlay(self):
         self.cfg["show_overlay"] = self.act_overlay.isChecked()
         self._refresh_overlay()
+        if self.act_overlay.isChecked() and self.img is not None \
+                and not self.overlay_data.get(self.current):
+            # annotations are drawn from the solution: without one there is nothing to draw, and a silently
+            # empty picture reads as a broken switch rather than as "this frame has not been solved yet"
+            self.statusBar().showMessage(
+                t("这张图还没有解析：标注来自解析结果，先用「解析并标注」把它解出来"), 8000)
 
     def _refresh_overlay(self):
         data = self.overlay_data.get(self.current)
         if self.act_overlay.isChecked() and data:
-            on = self._groups_on()
-            self.view.draw_overlay(data[0], data[1], data[2] if "grid" in on else None,
-                                   categories={k for k in on if k not in ("named", "grid")},
-                                   show_named="named" in on, shape_style=self.cmb_shape.currentData())
+            on, extra = self._groups_on(), self._extras_on()
+            self.view.draw_overlay(data[0], data[1], data[2] if "grid" in extra else None,
+                                   categories=set(on), show_named="named" in extra,
+                                   shape_style=self.cmb_shape.currentData())
         else:
             self.view.clear_overlay()
 
@@ -664,18 +2992,231 @@ class MainWindow(QMainWindow):
         if self.img is not None:
             HeaderDialog(self.img, self).exec_()
 
+    def fix_header(self):
+        """Correct the optics and pointing recorded in the frame's header — what every solver searches on."""
+        if self.img is None:
+            return
+        if self.img.fmt != "fits":
+            QMessageBox.information(self, "TTSkyAnnot", t("只有 FITS 文件能这样修改文件头。"))
+            return
+        d = FixHeaderDialog(self.img, self)
+        if not d.exec_():
+            return
+        if d.all_files.isChecked():
+            msg = t("已修正 %d 张的文件头") % len(d.done_paths)
+            if d.failed_paths:
+                msg += "，" + t("失败 %d 张") % len(d.failed_paths)
+        else:
+            msg = "%s: %s" % (t("已修正文件头"), ", ".join(d.written))
+        self.lbl_info.setText(msg)
+        self.logbox.appendPlainText(msg)
+        for p, e in d.failed_paths:
+            self.logbox.appendPlainText("  %s: %s" % (p, e))
+
+    def show_histogram(self):
+        """The histogram panel for the frame on screen. Its levels apply to the display only."""
+        if self.img is None:
+            return
+        raw = np.asarray(self.img.data, np.float32)
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            dlg = HistogramDialog(self, raw=raw, balance=getattr(self.img, "_balance", None),
+                                  levels=self._levels_for(self.img))
+        finally:
+            QApplication.restoreOverrideCursor()
+        self._hist_before = (dlg.levels().as_dict(), dlg.balance().as_dict())
+        dlg.changed.connect(lambda: self._apply_histogram(dlg))
+        try:
+            dlg.exec_()
+        finally:
+            self._apply_histogram(dlg)
+
+    def _apply_histogram(self, dlg):
+        """Take the panel's state onto the picture: the balance first, then the levels over it."""
+        if self.img is None:
+            return
+        state = (dlg.levels().as_dict(), dlg.balance().as_dict())
+        if state == getattr(self, "_hist_before", None):
+            return                       # opened and closed without moving anything: keep the picture as it is
+        self._hist_before = state
+        self._set_levels(self.img, dlg.levels())
+        self.img._balance = dlg.balance()
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            self._refresh_preview()
+        finally:
+            QApplication.restoreOverrideCursor()
+
+    def _levels_for(self, img):
+        """The levels that reproduce what the picture currently shows, so the panel opens on them."""
+        lv = getattr(img, "_levels", None)
+        if lv is not None:
+            return lv
+        base = np.asarray(img.data, np.float32)
+        bal = getattr(img, "_balance", None)
+        if bal is not None and not bal.is_identity:
+            base = bal.apply(base[::4, ::4])
+        return hist_mod.auto_levels(base)
+
+    def _set_levels(self, img, levels):
+        img._levels = levels
+        self.cfg["levels"] = levels.as_dict()
+
+    def _refresh_preview(self):
+        """Redraw the picture with the current levels, leaving the file alone."""
+        if self.img is None:
+            return
+        bal = getattr(self.img, "_balance", None) or imageio.Balance()
+        lv = getattr(self.img, "_levels", None)
+        if lv is not None and not lv.per_channel:
+            # the panel moves one curve: 16-bit table, no 300 MB float frame in between
+            self.view.show_rgb(imageio.apply_u8(self.img.data, bal, lv))
+            return
+        base = np.asarray(self.img.data, np.float32)
+        if bal is not None and not bal.is_identity:
+            base = bal.apply(base)
+        disp = lv.apply(base) if lv is not None else imageio.display_stretch(self.img, self.cmb_stretch.currentData())
+        self.view.show_array(disp, own=disp is not self.img.data)
+
+    def _apply_theme(self, name):
+        """Switch the colour scheme in place — no restart.
+
+        Every theme-dependent rule lives in one application-wide stylesheet, so re-applying it restyles the
+        window; the handful of widgets that carry a sheet of their own are matched against the one they were
+        built with and given its counterpart. The views the sheet cannot reach (the canvas behind the picture,
+        the drop hint) are repainted by hand.
+        """
+        before = {"toggle": TOGGLE_QSS, "button": BUTTON_QSS, "bar": BAR_QSS,
+                  "subtitle": SUBTITLE_QSS, "panel": PANEL_QSS}
+        _dark_palette(QApplication.instance(), name)
+        after = {"toggle": TOGGLE_QSS, "button": BUTTON_QSS, "bar": BAR_QSS,
+                 "subtitle": SUBTITLE_QSS, "panel": PANEL_QSS}
+        for w in self.findChildren(QWidget):
+            sheet = w.styleSheet()
+            if not sheet:
+                continue
+            for key, old in before.items():
+                if sheet == old:
+                    w.setStyleSheet(after[key])
+                    break
+        self.list.setStyleSheet(_list_qss(self.list))
+        self.file_list.setStyleSheet(_list_qss(self.file_list))
+        for dlg in self.findChildren(FramedDialog):        # an open dialog carries the panel sheet plus its card
+            dlg.setStyleSheet(dlg._card_sheet())
+        self.view.set_theme(C)
+        _paint_title_bar(self, THEME == "dark")            # the window frame is drawn by Windows, not by us
+        self._refresh_overlay()
+
     def settings(self):
         d = SettingsDialog(self.cfg, self)
-        if d.exec_():
-            old_lang = self.cfg.get("language", "")
+        accepted = bool(d.exec_())
+        old_lang = self.cfg.get("language", "")
+        old_theme = self.cfg.get("theme", "dark")
+        if accepted:
             self.cfg = d.values()
-            config.save(self.cfg)
-            if self.cfg.get("language", "") != old_lang:
-                QMessageBox.information(self, "TTSkyAnnot", "Restart TTSkyAnnot to switch the language. / 重启后生效。")
+        else:
+            # closed with ✕ or Esc: nothing else is applied, but a colour scheme that was picked stays — it
+            # is a preference, not an edit, and losing it here is what made "选了浅色却还是深色" happen
+            picked = d.theme_name()
+            if picked and picked != old_theme:
+                self.cfg["theme"] = picked
+        config._diag("settings: accepted=%s picked=%r old=%r new=%r"
+                     % (accepted, d.theme_name(), old_theme, self.cfg.get("theme")))
+        if self.cfg.get("theme", "dark") != THEME:
+            self._apply_theme(self.cfg.get("theme", "dark"))     # a picked scheme was already applied live
+        if not config.save(self.cfg):
+            QMessageBox.warning(self, "TTSkyAnnot",
+                                t("设置文件写入失败：%s\n配色等选项可能在下次启动时不生效。") % config._path())
+        if accepted and self.cfg.get("language", "") != old_lang:
+            self._offer_restart()
+
+    def _offer_restart(self):
+        """The interface language is baked into the window when it is built, so a language change needs a new
+        window. The colour scheme does not: it is applied in place."""
+        if QMessageBox.question(self, "TTSkyAnnot", t("界面语言已保存，需要重启后生效。现在重启吗？"),
+                                QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes) != QMessageBox.Yes:
+            return
+        args = [os.path.abspath(self.current)] if self.current else []
+        if getattr(sys, "frozen", False):                 # the packaged app is its own executable
+            ok = QProcess.startDetached(sys.executable, args)
+        else:                                             # running from source: python <entry> [file]
+            entry = os.path.abspath(sys.argv[0] or "")
+            if os.path.basename(entry) in ("__main__.py", "-c", ""):
+                ok = QProcess.startDetached(sys.executable, ["-m", "skyannot"] + args)
+            else:
+                ok = QProcess.startDetached(sys.executable, [entry] + args)
+        if not ok:
+            config._diag("restart failed: %r %r" % (sys.executable, args))
+            QMessageBox.information(self, "TTSkyAnnot", t("无法自动重启，请手动重新打开程序。"))
+            return
+        config._diag("restarting: %r %r" % (sys.executable, args))
+        self.close()
+
+    # ---- updates --------------------------------------------------------
+    def _auto_update_check(self):
+        """Ask the configured feed once the window has settled; never hold up the start."""
+        if not updater.app_dir():
+            return                     # a source run has no install to replace, and the tests must stay offline
+        if (self.cfg.get("update_url") or "").strip():
+            self.check_updates(manual=False)
+
+    def check_updates(self, manual=True):
+        """Read the update feed; a new version opens the dialog that can fetch and install it."""
+        base = (self.cfg.get("update_url") or "").strip()
+        if not base:
+            if manual:
+                QMessageBox.information(self, "TTSkyAnnot",
+                                        t("还没有设置更新源。请在「设置 → 更新源」里填 version.json 所在的地址或文件夹。"))
+            return
+        if self._update_check is not None and self._update_check.isRunning():
+            return
+        self._update_manual = manual
+        self.btn_update.setEnabled(False)
+        self.btn_update.setText(t("检查中…"))
+        self._update_check = _UpdateCheck(base, self)
+        self._update_check.done.connect(self._update_checked)
+        self._update_check.start()
+
+    def _update_checked(self, feed, error):
+        self.btn_update.setEnabled(True)
+        manual = self._update_manual
+        if error:
+            self.btn_update.setText(t("检查更新"))
+            if manual:
+                QMessageBox.warning(self, "TTSkyAnnot", "%s\n\n%s" % (t("检查更新失败"), error))
+            else:
+                self.logbox.appendPlainText("%s %s" % (t("检查更新失败"), error))
+            return
+        version = str((feed or {}).get("version") or "")
+        config._diag("update: check version=%r error=%r" % (version, error))
+        if updater.is_newer(version):
+            skipped = str(self.cfg.get("skipped_version") or "")
+            self._update_feed = feed
+            self.btn_update.setText("↑ %s" % version)
+            self.btn_update.setToolTip("%s %s" % (t("新版本"), version))
+            if manual or skipped != version:
+                d = UpdateDialog(feed, (self.cfg.get("update_url") or "").strip(), self)
+                d.exec_()
+                if d.skipped:
+                    self.cfg["skipped_version"] = version
+                    config.save(self.cfg)
+            else:
+                self.logbox.appendPlainText("%s %s（%s）" % (t("有新版本"), version, t("已跳过")))
+            return
+        self.btn_update.setText(t("已是最新"))
+        QTimer.singleShot(4000, lambda: self.btn_update.setText(t("检查更新")))
+        if manual:
+            QMessageBox.information(self, "TTSkyAnnot", "%s（%s）" % (t("已是最新版本"), __version__))
 
     # ---- annotation -----------------------------------------------------
     def start(self):
         if self.worker is not None and self.worker.isRunning():
+            return
+        # checked before anything else: with no catalogue ticked there is nothing to solve for, and the
+        # setting is worth complaining about even when no image happens to be selected
+        self.cfg["cats"] = list(self._cats_on())
+        if not self.cfg["cats"]:
+            QMessageBox.warning(self, "TTSkyAnnot", t("至少要选一个星表"))
             return
         rows = sorted({i.row() for i in self.list.selectedIndexes()}) or (
             [self.list.currentRow()] if self.list.currentRow() >= 0 else [])
@@ -684,15 +3225,35 @@ class MainWindow(QMainWindow):
         for k, c in self.chk.items():
             self.cfg[k] = c.isChecked()
         config.save(self.cfg)
-        opt = run.Options(target=self.ed_target.text().strip(), astap_path=self.cfg.get("astap_path", ""),
+        # a position typed into the centre-coordinate field wins: it is the most direct statement of where the
+        # frame is centred, and both solvers use it as the search point
+        coord = self.coord_radec()
+        if coord:
+            self.logbox.appendPlainText("%s RA %s Dec %s" % (t("解析提示：画面中心"), _hms(coord[0]), _dms(coord[1])))
+        elif self.ed_coord.text().strip():
+            # something is written there but it is not a position: say so instead of quietly ignoring it
+            self.ed_coord.setProperty("bad", True)
+            self.ed_coord.style().unpolish(self.ed_coord)
+            self.ed_coord.style().polish(self.ed_coord)
+            self.logbox.appendPlainText("%s %s" % (t("坐标无法识别（时 分 秒 / 度 分 秒）："),
+                                                   self.ed_coord.text().strip()))
+        coord = coord or self._target_radec
+        opt = run.Options(target=self.ed_target.text().strip(), target_radec=coord,
+                          astap_path=self.cfg.get("astap_path", ""),
                           nova_key=self.cfg.get("nova_api_key", ""), gaia_mag=float(self.cfg.get("gaia_mag", 16)),
+                          cats=tuple(self.cfg["cats"]),
                           write_txt=self.cfg["write_txt"], write_preview=self.cfg["write_preview"],
                           write_outlines=self.cfg["write_outlines"], write_wcs=self.cfg["write_wcs"],
                           out_dir=self.cfg.get("out_dir", ""),
                           stretch=self.cmb_stretch.currentData(),     # the preview looks like the viewer
-                          categories=tuple(k for k in self._groups_on() if k not in ("named", "grid")),
-                          named="named" in self._groups_on(), grid="grid" in self._groups_on(),
+                          categories=self._groups_on(),
+                          dso_cats=self._groups_on(),
+                          debayer=bool(self.cfg.get("debayer", True)),
+                          use_existing=bool(self.cfg.get("use_existing", True)),
+                          bayer_pattern=self.cfg.get("bayer_pattern", "auto"),
+                          named="named" in self._extras_on(), grid="grid" in self._extras_on(),
                           shape_style=self.cmb_shape.currentData())
+        self._last_opt = opt                         # save_current() writes with the same settings
         items = [(r, self.list.item(r).data(Qt.UserRole)) for r in rows]
         for r, _ in items:
             self.list.item(r).setText("⏳ " + os.path.basename(self.list.item(r).data(Qt.UserRole)))
@@ -704,14 +3265,49 @@ class MainWindow(QMainWindow):
         w.log.connect(self.logbox.appendPlainText)
         w.progress.connect(lambda i, f: self.prog.setValue(int(1000 * (self._k_done + f) / self._n_items)))
         w.finished_one.connect(self._one_done)
+        w.save_prompt.connect(self._save_prompt)
         w.finished.connect(self._all_done)
         self.worker = w
         w.start()
 
+    def _save_prompt(self, worker, res, path):
+        """The worker has finished an image and is waiting: ask before anything is written. Everything is
+        offered here, so a solve can be inspected and then thrown away without touching the folder."""
+        d = SaveDialog(path, run.output_paths(path, worker.opt),
+                       {"txt": worker.opt.write_txt, "outlines": worker.opt.write_outlines,
+                        "preview": worker.opt.write_preview, "wcs": worker.opt.write_wcs}, self)
+        accepted = d.exec_() == QDialog.Accepted
+        flags = d.flags() if accepted else {k: False for k in ("txt", "outlines", "preview", "wcs")}
+        if d.remember.isChecked() and accepted:
+            # "use this from now on": the chosen outputs become the settings, so batch runs stop asking
+            self.cfg.update(write_txt=flags["txt"], write_outlines=flags["outlines"],
+                            write_preview=flags["preview"], write_wcs=flags["wcs"])
+            for key, attr in (("txt", "write_txt"), ("outlines", "write_outlines"),
+                              ("preview", "write_preview"), ("wcs", "write_wcs")):
+                c = self.chk.get(attr)
+                if c is not None:
+                    c.setChecked(flags[key])
+            config.save(self.cfg)
+        if accepted and flags.get("_remember"):
+            flags["_remember"] = True
+        worker.answer(flags)
+        if accepted and any(flags.get(k) for k in ("txt", "outlines", "preview", "wcs")):
+            res.saved = True
+        elif res.ok:
+            self._unsaved.add(res.image)                   # still on screen, still not written
+        self._update_save_button()
+
     def _one_done(self, row, res):
         self._k_done += 1
         it = self.list.item(row)
-        name = os.path.basename(it.data(Qt.UserRole))
+        if it is None or it.data(Qt.UserRole) != res.image:
+            # the queue changed while the run was going (rows added or removed): the row number is stale, so
+            # find the entry by its path instead — and if it is gone too, there is nothing to tick
+            it = next((self.list.item(i) for i in range(self.list.count())
+                       if self.list.item(i).data(Qt.UserRole) == res.image), None)
+        if it is None:
+            return
+        name = os.path.basename(res.image)
         if res.ok:
             st = res.stats
             acc = st.get("median_px")
@@ -722,10 +3318,16 @@ class MainWindow(QMainWindow):
             self.btn_folder.setEnabled(True)
             self._last_out = next(iter(res.outputs.values()), res.image)
             if res.image == self.current:
-                self.show_image(res.image, keep_view=True)      # reload: header may now carry the solution
+                self._solved_reload = True
+                self.show_image(res.image)              # reload: header may now carry the solution
         else:
             it.setText("✗ " + name)
             it.setToolTip(res.error)
+            self.logbox.appendPlainText("%s%s" % (t("解析失败："), res.error))
+            if not self.ed_target.text().strip() and not self.ed_coord.text().strip():
+                # a blind solve on a processed wide field is the hardest case there is; a hint fixes it at once
+                self.logbox.appendPlainText(
+                    t("可以在「天体名」里填目标（如 M33），或在「中心坐标」里填画面中心，解析器会快很多。"))
 
     def _all_done(self):
         self.btn_start.setEnabled(True)
@@ -737,9 +3339,380 @@ class MainWindow(QMainWindow):
         if p:
             QDesktopServices.openUrl(QUrl.fromLocalFile(os.path.dirname(p)))
 
+    def _update_save_button(self):
+        """The save button is about the picture on screen: it is there when its result is not on disk yet."""
+        if not hasattr(self, "btn_save"):
+            return
+        n = len(self._unsaved)
+        self.btn_save.setEnabled(bool(self.current) and self.current in self._unsaved)
+        self.btn_save.setText(t("保存当前结果") if n <= 1 else "%s (%d)" % (t("保存结果"), n))
+        self.btn_save.setToolTip(t("把这张图的解析结果写到磁盘（解析本身不写任何文件）")
+                                 if not n else "%s：%d %s" % (t("还没保存的结果"), n, t("张")))
+
+    def save_current(self):
+        """Write the results of the picture on screen: the way back for a solve that was not saved."""
+        path = self.current
+        res = self.results.get(path)
+        if not res or not res.ok or path not in self._unsaved:
+            return
+        d = SaveDialog(path, run.output_paths(path, self._last_opt or run.Options()),
+                       {"txt": self.cfg["write_txt"], "outlines": self.cfg["write_outlines"],
+                        "preview": self.cfg["write_preview"], "wcs": self.cfg["write_wcs"]}, self)
+        if d.exec_() != QDialog.Accepted:
+            return
+        flags = d.flags()
+        opt = replace(self._last_opt, write_txt=flags["txt"], write_outlines=flags["outlines"],
+                      write_preview=flags["preview"], write_wcs=flags["wcs"])
+        try:
+            img = imageio.load(path, want_debayer=opt.debayer,
+                               pattern="" if opt.bayer_pattern == "auto" else opt.bayer_pattern)
+            run.write_outputs(img, res, opt, imageio.display_stretch(img, opt.stretch),
+                              log=self.logbox.appendPlainText)
+        except Exception as e:
+            QMessageBox.warning(self, "TTSkyAnnot", "%s\n\n%s" % (t("保存失败"), e))
+            return
+        self._unsaved.discard(path)
+        self._last_out = next(iter(res.outputs.values()), path)
+        self.btn_folder.setEnabled(True)
+        self._update_save_button()
+        for k, p in res.outputs.items():
+            self.logbox.appendPlainText("  %-9s %s" % (k, p))
+
+    def _make_target_completer(self):
+        """Complete the object-name field from the bundled deep-sky catalogues.
+
+        Every object is offered under every name it has (designation, Messier number, catalogue number, common
+        name), so "ring", "m57", "ngc6720" and plain "6720" all lead to the Ring Nebula. Picking one records
+        its position, which is then used as the solve hint: a mount's own coordinates say where it was told to
+        point, which is not always where the frame ended up.
+        """
+        entries = catalogs.searchable()
+        self._target_dso = {}
+        self._target_by_key = {}                       # every name an object has -> the object
+        labels = []
+        for keys, d in entries:
+            for alias in str(keys).split("|"):      # the names of one object, joined by "|"
+                if alias:
+                    self._target_by_key.setdefault(alias, d)
+            key = catalogs.label_for(d)
+            if key not in self._target_dso:            # keep the first (brightest) of duplicate labels
+                self._target_dso[key] = d
+                labels.append(key)
+        model = QStringListModel(labels, self)
+        comp = QCompleter(model, self)
+        comp.setCaseSensitivity(Qt.CaseInsensitive)
+        comp.setFilterMode(Qt.MatchContains)           # searching inside the names, not only at their start
+        comp.setMaxVisibleItems(16)
+        comp.setCompletionMode(QCompleter.PopupCompletion)
+        self.ed_target.setCompleter(comp)
+        self._target_model = model
+        self._target_local = set(labels)               # names that came from the bundled catalogues
+        self._remote = {}
+        self._remote_lookup = RemoteLookup(self)
+        self._remote_lookup.found.connect(self._remote_found)
+        self._remote_timer = QTimer(self)
+        self._remote_timer.setSingleShot(True)
+        self._remote_timer.setInterval(220)            # give the typing a chance to settle
+        self._remote_timer.timeout.connect(self._ask_remote)
+        comp.activated.connect(self._target_chosen)    # picking from the list
+        self.ed_target.textEdited.connect(self._target_typed)
+
+    def _remote_found(self, text, recs):
+        """Add what the server knows to the completer, keeping the bundled entries first."""
+        if text != self.ed_target.text().strip():
+            return                                     # the field has moved on; this answer is stale
+        added = []
+        for rec in recs:
+            label = tickwhale.label_for(rec)
+            if label in self._target_dso:
+                continue
+            self._remote[label] = rec
+            self._target_dso[label] = rec
+            added.append(label)
+        if added:
+            self._target_model.setStringList(sorted(self._target_dso))
+            self.logbox.appendPlainText("%s %d %s: %s" % (
+                t("在线星表补充"), len(added), t("个天体"), ", ".join(added[:4])))
+
+    def _ask_remote(self):
+        """Ask the configured server about the current text, when one is configured."""
+        base = (self.cfg.get("tickwhale_base") or "").strip()
+        text = self.ed_target.text().strip()
+        if base and len(text) >= 2 and text.lower() not in self._target_local:
+            self._remote_lookup.ask(text, base)
+
+    def _target_chosen(self, text):
+        d = self._target_dso.get(text)
+        if d is None:
+            return
+        if isinstance(d, dict):                        # came from the online catalogue
+            self._target_radec = (d["ra"], d["dec"])
+            name, online = tickwhale.label_for(d), "  (%s)" % t("在线星表")
+        else:
+            self._target_radec = (d.ra, d.dec)
+            name, online = catalogs.label_for(d), ""
+        self.logbox.appendPlainText("%s %s: RA %.5f Dec %.5f%s" % (
+            t("使用天体"), name, self._target_radec[0], self._target_radec[1], online))
+
+    def _target_typed(self, text):
+        """Free text is a label, not a position, until it names a known object.
+
+        Typing "M33" is enough: it is looked up against every name each object carries (designation, Messier
+        number, common name), so the position becomes the solve hint without having to pick from the list."""
+        d = self._target_dso.get(text.strip()) or self._target_by_key.get(text.replace(" ", "").strip().lower())
+        if d is not None:
+            self._target_radec = (d.ra, d.dec)
+        else:
+            self._target_radec = ()
+        self._remote_timer.start()
+
+    # ---- the centre-coordinate field ------------------------------------
+    def _coord_entered(self):
+        """Normalise the typed position into hours/degrees, minutes and seconds; flag it when it is not one."""
+        text = self.ed_coord.text().strip()
+        radec = parse_radec(text) if text else None
+        bad = bool(text) and radec is None
+        if bool(self.ed_coord.property("bad")) != bad:
+            self.ed_coord.setProperty("bad", bad)
+            self.ed_coord.style().unpolish(self.ed_coord)
+            self.ed_coord.style().polish(self.ed_coord)
+        if radec is None:
+            if text:
+                self.logbox.appendPlainText("%s %s" % (t("坐标无法识别（时 分 秒 / 度 分 秒）："), text))
+            return
+        formatted = "%s  %s" % (fmt_ra(radec[0]), fmt_dec(radec[1]))
+        if formatted != self.ed_coord.text():
+            self.ed_coord.setText(formatted)
+        self.logbox.appendPlainText("%s RA %s Dec %s" % (t("使用画面中心坐标"), _hms(radec[0]), _dms(radec[1])))
+
+    def coord_radec(self):
+        """The position typed into the centre-coordinate field, in degrees, or () when it is empty or unreadable."""
+        text = self.ed_coord.text().strip()
+        return parse_radec(text) or () if text else ()
+
+    def open_in_pixinsight(self):
+        """Hand the picture on screen to PixInsight, the way Explorer's "Open with" does."""
+        if not self.current:
+            return
+        try:
+            piopen.open_image(self.current, self.cfg.get("pixinsight_path", ""))
+        except Exception as e:
+            QMessageBox.warning(self, "TTSkyAnnot", "%s\n\n%s" % (t("无法打开 PixInsight"), e))
+
+    # ---- screening: throw away or file away a frame ---------------------
+    def delete_current(self):
+        """Send the frame on screen to the Recycle Bin, asking first.
+
+        The confirmation shows the file name rather than a generic "are you sure": the usual mistake is
+        deleting the frame next to the one intended, and only the name makes that visible. Someone screening a
+        folder in bulk can switch the question off in the settings.
+        """
+        if not self.current:
+            return
+        if self.cfg.get("confirm_delete", True) and not self._confirm_delete(self.current):
+            return
+        self.delete_current_now()
+
+    def _confirm_delete(self, path):
+        """Ask before throwing a frame away. True = go ahead."""
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Question)
+        box.setWindowTitle(t("删除图像"))
+        box.setText(t("要删除这一张吗？"))
+        box.setInformativeText(os.path.basename(path))
+        box.setDetailedText(path)
+        yes = box.addButton(t("移入回收站"), QMessageBox.DestructiveRole)
+        no = box.addButton(t("取消"), QMessageBox.RejectRole)
+        box.setDefaultButton(no)                       # Enter keeps the file, not deletes it
+        box.setEscapeButton(no)
+        no.setFocus()
+        box.exec_()
+        return box.clickedButton() is yes
+
+    def delete_current_now(self):
+        """Send the frame on screen to the Recycle Bin, with no further questions."""
+        if not self.current:
+            return
+        path = os.path.abspath(self.current)
+        # where the frame sat in the list, read before it is gone: after the removal the same index is the
+        # frame that followed it, which is the one to look at next
+        files, pos = self._folder_files()
+        gone, self.current = self.current, None        # stop playback and the loader before touching the file
+        if self.act_play.isChecked():
+            self.act_play.setChecked(False)
+        try:
+            recoverable = fileop.delete(path)
+        except Exception as e:
+            self.current = gone
+            QMessageBox.warning(self, "TTSkyAnnot",
+                                "%s\n\n%s\n%s" % (t("无法删除这个文件"), path, e))
+            return
+        if recoverable:
+            self._offer_undo("✖ " + t("已移入回收站") + ": " + os.path.basename(path),
+                             lambda: self._undo_delete(path))
+            self._forget(path)
+            self._advance_after_removal(path, pos)
+        else:
+            # no Recycle Bin on this drive: the file is gone for good, so do not offer an undo. The next
+            # frame is loaded first and the message written afterwards, so it survives that reload.
+            self._forget(path)
+            self._advance_after_removal(path, pos)
+            self._undo_action, self._undo_message = None, ""
+            self._undo_timer.stop()
+            self.lbl_info.setText("✖ " + t("已删除（回收站不可用，无法撤销）") + ": " + os.path.basename(path))
+        self.logbox.appendPlainText("%s %s" % (
+            t("已移入回收站") if recoverable else t("已永久删除"), path))
+
+    def _undo_delete(self, path):
+        src = fileop.trash_path(path)
+        if not src:
+            self.lbl_info.setText(t("回收站里已经找不到它了"))
+            return
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            shutil.move(src, path)
+        except Exception as e:
+            QMessageBox.warning(self, "TTSkyAnnot", "%s\n\n%s" % (t("撤销失败"), e))
+            return
+        self.add_files([path], select=False)
+        self._folder = None                            # the folder has this image again: rebuild the list
+        self.show_image(path)
+        self.logbox.appendPlainText("%s %s" % (t("已撤销删除"), path))
+
+    def move_current(self):
+        """File the frame on screen away into another folder."""
+        if not self.current:
+            return
+        start = self.cfg.get("last_move_dir") or self.cfg.get("last_dir", "")
+        folder = QFileDialog.getExistingDirectory(self, t("移动到文件夹"), start)
+        if not folder:
+            return
+        folder = os.path.abspath(folder)
+        if folder == os.path.dirname(os.path.abspath(self.current)):
+            return                                     # already there
+        self.cfg["last_move_dir"] = folder
+        path = os.path.abspath(self.current)
+        files, pos = self._folder_files()              # its slot, read while the frame is still in the list
+        try:
+            landed = fileop.move(path, folder)
+        except Exception as e:
+            QMessageBox.warning(self, "TTSkyAnnot", "%s\n\n%s\n%s" % (t("无法移动这个文件"), path, e))
+            return
+        self._offer_undo("➜ " + t("已移动") + ": " + landed, lambda: self._undo_move(landed, path))
+        self._forget(path)
+        self._advance_after_removal(path, pos)
+        self.logbox.appendPlainText("%s %s" % (t("已移动"), landed))
+
+    def _undo_move(self, landed, original):
+        try:
+            os.makedirs(os.path.dirname(original), exist_ok=True)
+            os.replace(landed, original)
+        except Exception as e:
+            QMessageBox.warning(self, "TTSkyAnnot", "%s\n\n%s" % (t("撤销失败"), e))
+            return
+        self.add_files([original], select=False)
+        self._folder = None
+        self.show_image(original)
+        self.logbox.appendPlainText("%s %s" % (t("已撤销移动"), original))
+
+    def _forget(self, path):
+        """Drop everything we remember about a file that is no longer where it was."""
+        self.results.pop(path, None)
+        self.overlay_data.pop(path, None)
+        for row in range(self.list.count() - 1, -1, -1):
+            if self.list.item(row).data(Qt.UserRole) == path:
+                self.list.takeItem(row)
+        if self._loaded_path == path:
+            self._loaded_path = None
+
+    def _advance_after_removal(self, path, pos=-1):
+        """Keep screening flowing: show the frame that followed the removed one (or the new last frame when
+        the last one was removed). `pos` is the slot the removed frame had, read before it went away — after
+        the removal the same index is the next frame. Loaded directly rather than through step(), so a
+        playback tick cannot slip in between."""
+        folder = os.path.dirname(os.path.abspath(path))
+        self.current = path                            # the list follows the file on screen: find its folder
+        self._folder = None                            # the folder contents changed: rebuild the list
+        self._folder_dirty = True
+        files, _i = self._folder_files()
+        if not files:
+            self.clear_image_view()
+            return
+        j = pos if 0 <= pos < len(files) else len(files) - 1
+        p = os.path.join(folder, files[j])
+        self.add_files([p], select=False)
+        self.show_image(p)
+
+    def clear_image_view(self):
+        self.img = None
+        self.wcs = None
+        self.current = None
+        self.view.clear_image()
+        self.lbl_info.setText(t("这个文件夹里没有图像了"))
+        self.setWindowTitle("TTSkyAnnot")
+        self.refresh_folder()
+
+    def _offer_undo(self, message, action):
+        """Put an undo in the status bar for a few seconds (one slot: a second removal replaces it). The
+        message is kept because the next frame finishing to load rewrites the status bar."""
+        self._undo_action = action
+        self._undo_message = message
+        self.lbl_info.setText(self._undo_hint())
+        self._undo_timer.start(10000)
+
+    def _undo_hint(self):
+        return "%s   ·   %s" % (self._undo_message, t("按 Ctrl+Z 撤销"))
+
+    def _expire_undo(self):
+        self._undo_action = None
+        self._undo_message = ""
+
+    def undo_last(self):
+        action, self._undo_action = self._undo_action, None
+        self._undo_timer.stop()
+        if action:
+            action()
+
+
     def closeEvent(self, ev):
+        self._stop_slideshow()
+        # a folder scan reads headers from disk: let it finish rather than destroying a running QThread
+        if getattr(self, "_scan", None) is not None and self._scan.isRunning():
+            self._scan.wait(4000)
         config.save(self.cfg)
         super().closeEvent(ev)
+
+    def showEvent(self, ev):
+        super().showEvent(ev)
+        # the window's own title bar is drawn by Windows, not by Qt: tell it which theme the app is in
+        _paint_title_bar(self, THEME == "dark")
+
+
+def _paint_title_bar(win, dark: bool = True) -> None:
+    """Ask Windows to draw the window's title bar in the app's theme.
+
+    The title bar is outside the client area, so neither the palette nor the stylesheet reaches it: a dark
+    window kept the system's light caption above its dark toolbar. DWM has an attribute for exactly this
+    (20 on Windows 10 2004 and later, 19 on the first builds that had it); elsewhere this does nothing.
+    """
+    if not sys.platform.startswith("win"):
+        return
+    try:
+        import ctypes
+        hwnd = int(win.winId())
+        value = ctypes.c_int(1 if dark else 0)
+        # 20 is the attribute on Windows 10 2004 and later, 19 on the builds before that — and some of those
+        # answer 20 with success while ignoring it, which is how a dark window kept a light caption. Set both.
+        for attribute in (20, 19):
+            ctypes.windll.dwmapi.DwmSetWindowAttribute(hwnd, attribute, ctypes.byref(value),
+                                                       ctypes.sizeof(value))
+        # ask for a new frame now: after a live theme change DWM can keep drawing the old caption until
+        # something forces it to compose the frame again
+        SWP_FRAMECHANGED, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER = 0x0020, 0x0002, 0x0001, 0x0004
+        ctypes.windll.user32.SetWindowPos(hwnd, 0, 0, 0, 0, 0,
+                                          SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER)
+    except Exception:
+        pass
 
 
 def _hms(ra):
@@ -753,24 +3726,136 @@ def _dms(dec):
     return "%s%02d°%02d′%04.1f″" % (s, int(d), int(d * 60) % 60, (d * 3600) % 60)
 
 
-def _dark_palette(app):
+def fmt_ra(ra_deg):
+    """RA in degrees as hours, minutes, seconds: "05 34 31.9"."""
+    h = (float(ra_deg) / 15.0) % 24.0
+    hh = int(h)
+    mm = int((h - hh) * 60.0)
+    ss = ((h - hh) * 60.0 - mm) * 60.0
+    if ss < 0.0:                                     # a rounding step below zero would print as "-0.0"
+        ss = 0.0
+    ss = round(ss, 1)
+    if ss >= 60.0:
+        ss -= 60.0
+        mm += 1
+    if mm >= 60:
+        mm -= 60
+        hh = (hh + 1) % 24
+    return "%02d %02d %04.1f" % (hh, mm, ss)
+
+
+def fmt_dec(dec_deg):
+    """Dec in degrees as degrees, minutes, seconds: "+22 00 52"."""
+    dec = float(dec_deg)
+    sign = "-" if dec < 0 else "+"
+    d = abs(dec)
+    dd = int(d)
+    mm = int((d - dd) * 60.0)
+    ss = int(round(((d - dd) * 60.0 - mm) * 60.0))
+    if ss >= 60:
+        ss -= 60
+        mm += 1
+    if mm >= 60:
+        mm -= 60
+        dd += 1
+    return "%s%02d %02d %02d" % (sign, dd, mm, ss)
+
+
+def parse_radec(text):
+    """RA/Dec in degrees from what was typed, or None when the text is not a position.
+
+    Sexagesimal is what the panel shows and what the sites quote: "05 34 31.9 +22 00 52",
+    "05:34:31.9 +22:00:52", "05h34m31.9s +22d00m52s" and the degree/minute/second spellings all work. Plain
+    degrees are accepted as well ("83.633 +22.014"), where a single RA number above 24 cannot be hours. The
+    declination needs its sign when hours and degrees are written without separators, which is why the panel
+    always puts one in.
+    """
+    raw = (text or "").strip().replace("−", "-").replace("–", "-")
+    if not raw:
+        return None
+    s = re.sub(r"(?<=\d)[hmsd](?![A-Za-z])", " ", raw, flags=re.I)
+    for ch in "°′″'\"":
+        s = s.replace(ch, " ")
+    for ch in ":,;":
+        s = s.replace(ch, " ")
+    if re.search(r"[A-Za-z]", s):                    # letters left over: a name, not a position
+        return None
+    tokens = s.split()
+    if not tokens or len(tokens) < 2:
+        return None
+    # merge a token that is only a sign into the number after it
+    merged = []
+    i = 0
+    while i < len(tokens):
+        if tokens[i] in ("+", "-") and i + 1 < len(tokens):
+            merged.append(tokens[i] + tokens[i + 1])
+            i += 2
+        else:
+            merged.append(tokens[i])
+            i += 1
+    try:
+        values = [float(t) for t in merged]
+    except ValueError:
+        return None
+    if any(not math.isfinite(v) for v in values):
+        return None
+    signs = [i for i, t in enumerate(merged) if t.startswith(("+", "-"))]
+    if signs and signs[0] > 0:
+        split = signs[0]
+    else:
+        # no sign: only an even count splits unambiguously (2 = degrees each, 4 = 2+2, 6 = 3+3); a stray
+        # odd count would have to guess which side gets the extra number, and a wrong hint is worse than none
+        n = len(values)
+        if n not in (2, 4, 6):
+            return None
+        split = n // 2
+    ra_parts, dec_parts = values[:split], values[split:]
+    if not ra_parts or not dec_parts or len(ra_parts) > 3 or len(dec_parts) > 3:
+        return None
+    for parts in (ra_parts, dec_parts):
+        if any(abs(p) >= 60 for p in parts[1:]):
+            return None
+    ra = ra_parts[0] + (ra_parts[1] / 60.0 if len(ra_parts) > 1 else 0.0) \
+        + (ra_parts[2] / 3600.0 if len(ra_parts) > 2 else 0.0)
+    if len(ra_parts) == 1 and ra > 24.0:             # a single number that large cannot be hours
+        ra_deg = ra
+    else:
+        ra_deg = ra * 15.0
+    dec = abs(dec_parts[0]) + (dec_parts[1] / 60.0 if len(dec_parts) > 1 else 0.0) \
+        + (dec_parts[2] / 3600.0 if len(dec_parts) > 2 else 0.0)
+    dec_deg = -dec if "-" in merged[split] else dec
+    ra_deg %= 360.0
+    if not (-90.0 <= dec_deg <= 90.0):
+        return None
+    return (ra_deg, dec_deg)
+
+
+def _dark_palette(app, theme="dark"):
+    """Apply a theme to the whole application: Fusion draws the parts QSS does not reach, and the palette
+    keeps dialogs, tooltips and menus in the same tones as the rest."""
+    set_theme(theme)
     app.setStyle("Fusion")
     p = QPalette()
-    base, panel, text = QColor("#12161B"), QColor("#1A2027"), QColor("#DCE3EA")
-    p.setColor(QPalette.Window, panel)
-    p.setColor(QPalette.WindowText, text)
-    p.setColor(QPalette.Base, base)
-    p.setColor(QPalette.AlternateBase, panel)
-    p.setColor(QPalette.Text, text)
-    p.setColor(QPalette.Button, QColor("#232A33"))
-    p.setColor(QPalette.ButtonText, text)
-    p.setColor(QPalette.Highlight, QColor(ACCENT))
-    p.setColor(QPalette.HighlightedText, QColor("#06140D"))
-    p.setColor(QPalette.ToolTipBase, panel)
-    p.setColor(QPalette.ToolTipText, text)
-    p.setColor(QPalette.Disabled, QPalette.Text, QColor("#6C7A86"))
-    p.setColor(QPalette.Disabled, QPalette.ButtonText, QColor("#6C7A86"))
+    p.setColor(QPalette.Window, QColor(C["bg"]))
+    p.setColor(QPalette.WindowText, QColor(C["fg1"]))
+    p.setColor(QPalette.Base, QColor(C["surface"]))
+    p.setColor(QPalette.AlternateBase, QColor(C["surface2"]))
+    p.setColor(QPalette.Text, QColor(C["fg1"]))
+    p.setColor(QPalette.PlaceholderText, QColor(C["fg5"]))
+    p.setColor(QPalette.Button, QColor(C["surface2"]))
+    p.setColor(QPalette.ButtonText, QColor(C["fg1"]))
+    p.setColor(QPalette.BrightText, QColor(C["accent"]))
+    p.setColor(QPalette.Link, QColor(C["accent"]))
+    p.setColor(QPalette.Highlight, QColor(C["accent"]))
+    p.setColor(QPalette.HighlightedText, QColor(C["on_accent"]))
+    p.setColor(QPalette.ToolTipBase, QColor(C["surface"]))
+    p.setColor(QPalette.ToolTipText, QColor(C["fg1"]))
+    p.setColor(QPalette.Mid, QColor(C["stripe"]))
+    p.setColor(QPalette.Dark, QColor(C.get("shadow", C["canvas"])))
+    for role in (QPalette.Text, QPalette.ButtonText, QPalette.WindowText):
+        p.setColor(QPalette.Disabled, role, QColor(C["disabled"]))
     app.setPalette(p)
+    app.setStyleSheet(PANEL_QSS)          # the application-wide rules follow the theme too
 
 
 def _install_excepthook():
@@ -797,9 +3882,10 @@ def main(files=None):
     set_language(cfg.get("language", ""))
     QApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)
     app = QApplication.instance() or QApplication(sys.argv)
-    _dark_palette(app)
+    _dark_palette(app, cfg.get("theme", "dark"))
     app.setFont(QFont("Microsoft YaHei UI", 9))
     app.setWindowIcon(QIcon(os.path.join(catalogs.data_dir(), "app", "skyannot.png")))
     w = MainWindow(cfg, files)
     w.show()
     return app.exec_()
+

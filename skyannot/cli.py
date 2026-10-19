@@ -17,6 +17,9 @@ def main(argv=None) -> int:
     ap.add_argument("--target", default="", help="object name hint, e.g. M31")
     ap.add_argument("--out", default="", help="output folder (default: next to each image)")
     ap.add_argument("--gaia-mag", type=float, default=None, help="Gaia magnitude limit in the text (default 16)")
+    ap.add_argument("--cats", default=None, metavar="LIST",
+                    help="star catalogues to write, comma separated: hip,tyc,gaia (default: all; the bundled "
+                         "NamedStars list is always written)")
     ap.add_argument("--no-txt", action="store_true")
     ap.add_argument("--no-preview", action="store_true")
     ap.add_argument("--no-outlines", action="store_true")
@@ -27,10 +30,18 @@ def main(argv=None) -> int:
     if not a.annotate:
         from .gui import main as gui_main
         return gui_main(a.images)
-    from . import config, run
+    from . import config, run, vizier
     cfg = config.load()
+    if a.cats is not None:
+        cats = tuple(c.strip().lower() for c in a.cats.split(",") if c.strip())
+        unknown = [c for c in cats if c not in vizier.CATALOGS]
+        if unknown or not cats:
+            ap.error("--cats takes a comma separated list of %s" % ", ".join(vizier.CATALOGS))
+    else:
+        cats = tuple(c for c in cfg.get("cats", tuple(vizier.CATALOGS)) if c in vizier.CATALOGS)
     opt = run.Options(target=a.target, astap_path=cfg.get("astap_path", ""), nova_key=cfg.get("nova_api_key", ""),
                       gaia_mag=a.gaia_mag if a.gaia_mag is not None else float(cfg.get("gaia_mag", 16)),
+                      cats=cats,
                       write_txt=not a.no_txt, write_preview=not a.no_preview, write_outlines=not a.no_outlines,
                       write_wcs=not a.no_wcs, out_dir=a.out,
                       shape_style=a.shapes or cfg.get("shape_style", "outline"))
