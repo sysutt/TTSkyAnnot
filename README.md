@@ -131,7 +131,10 @@ powershell -File packaging\release.ps1 -Version 0.2.3 -SkipBuild   # 只重新�
    `/var/www/ttastro/ttskyannot/updates`），这样更新源永远不会指向一个还没传上去的包；
 5. 从公网地址 `https://www.ttastro.com/ttskyannot/updates/` 取回 `version.json` 和 zip 的 `Content-Length`
    做校验，证明线上真的生效；
-6. 把同一个构建装到本机 `dist\TTSkyAnnot`、重新签名，并把本机「更新源」设成公网地址。
+6. 把同一个构建装到本机 `dist\TTSkyAnnot`、重新签名，并把本机「更新源」设成公网地址；
+7. 把源码提交并推送到 GitHub（`git add -A` + commit + push），再打一个 `v<版本>` 标签一起推上去；
+   工作区里有超过 90 MB 的文件（比如误放进来的升级包）时这一步会拒绝提交并提示加进 `.gitignore`，
+   推送失败（离线、没有密钥）只记为警告，提交留在本地。
 
 服务器走本机已有的 ARM 密钥（`~\.ssh\ttastro_arm` → `ubuntu@168.138.200.230`），没有密钥时按站点项目的
 HANDOFF 走 tickwhale 中转。本机不装服务器密钥的机器可以用 `-SkipUpload`，只生成本地包。
