@@ -1525,6 +1525,12 @@ class SettingsDialog(FramedDialog):
         theme_row.addStretch(1)
         self.theme_switch.toggled.connect(self._theme_chosen)
         f.addRow(t("界面配色"), theme_row)
+        self.apikey = QLineEdit(cfg.get("api_key", ""))
+        self.apikey.setEchoMode(QLineEdit.PasswordEchoOnEdit)
+        self.apikey.setPlaceholderText("ttsky_…")
+        self.apikey.setToolTip(t("在线解析密钥（ttastro）。留空只能用很少的匿名次数；"
+                                 "在 ttastro.com/ttskyannot/key 可以免费领一个，填进这里即可。"))
+        f.addRow(t("在线解析密钥(可选)"), self.apikey)
         self.nova = QLineEdit(cfg.get("nova_api_key", ""))
         self.nova.setEchoMode(QLineEdit.PasswordEchoOnEdit)
         f.addRow(t("nova.astrometry.net API key(可选,最后的兜底)"), self.nova)
@@ -1606,6 +1612,7 @@ class SettingsDialog(FramedDialog):
 
     def values(self):
         self.cfg.update(language=self.lang.currentData(), theme=self.theme_name(),
+                        api_key=self.apikey.text().strip(),
                         nova_api_key=self.nova.text().strip(),
                         astap_path=self.astap.text().strip(), gaia_mag=self.gmag.value(),
                         out_dir=self.out.text().strip(), slide_interval=self.slide.value(),
@@ -3240,7 +3247,8 @@ class MainWindow(QMainWindow):
         coord = coord or self._target_radec
         opt = run.Options(target=self.ed_target.text().strip(), target_radec=coord,
                           astap_path=self.cfg.get("astap_path", ""),
-                          nova_key=self.cfg.get("nova_api_key", ""), gaia_mag=float(self.cfg.get("gaia_mag", 16)),
+                          nova_key=self.cfg.get("nova_api_key", ""),
+                          api_key=self.cfg.get("api_key", ""), gaia_mag=float(self.cfg.get("gaia_mag", 16)),
                           cats=tuple(self.cfg["cats"]),
                           write_txt=self.cfg["write_txt"], write_preview=self.cfg["write_preview"],
                           write_outlines=self.cfg["write_outlines"], write_wcs=self.cfg["write_wcs"],

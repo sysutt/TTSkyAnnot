@@ -36,10 +36,13 @@ def _tan_wcs(crval, crpix, cd):
 
 
 # ───────────────────────────── ttastro.com ─────────────────────────────
-def solve_ttastro(stars, width, height, hint=None, log=print, timeout=60.0, max_wait=180.0):
+def solve_ttastro(stars, width, height, hint=None, log=print, timeout=60.0, max_wait=180.0, api_key=""):
     """stars: [(x, y, flux, ...)] in index coordinates, brightest first.
-    The server has a single solve slot and answers {"code": "busy"} when it is taken: back off and retry."""
+    The server has a single solve slot and answers {"code": "busy"} when it is taken: back off and retry.
+    api_key: the key from ttastro.com/ttskyannot/key; without one the server allows only a few anonymous
+    solves a day, and its 401/429 reasons say what to do about it."""
     import requests
+    from . import __version__
     payload = {"w": int(width), "h": int(height),
                "stars": [[round(float(s[0]), 2), round(float(s[1]), 2), round(float(s[2]), 1)] for s in stars[:200]],
                "hint": {k: v for k, v in (hint or {}).items() if k in ("target", "ra", "dec", "pixscale") and v is not None}}
@@ -47,7 +50,10 @@ def solve_ttastro(stars, width, height, hint=None, log=print, timeout=60.0, max_
         raise SolveError("too few stars detected (%d)" % len(payload["stars"]))
     t0, delay = time.time(), 3.0
     while True:
-        r = requests.post(TTASTRO_URL, json=payload, timeout=timeout)
+        headers = {"User-Agent": "TTSkyAnnot/%s (Windows)" % __version__}
+        if (api_key or "").strip():
+            headers["X-API-Key"] = api_key.strip()
+        r = requests.post(TTASTRO_URL, json=payload, headers=headers, timeout=timeout)
         try:
             d = r.json()
         except ValueError:

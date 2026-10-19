@@ -415,6 +415,17 @@ Messier → NGC → IC → Sharpless → LBN → LDN → VdB → Ced → RCW
 按顺序尝试：**ttastro.com**（只上传星点坐标）→ **ASTAP**（离线，需本机安装）→ **nova.astrometry.net**
 （需 API key）。任一个成功即可。
 
+### 在线解析密钥（可选）
+
+ttastro.com 的在线解析对**匿名请求**只留很小的额度（每天 20 次，按 IP 计），批量解析请领一个免费密钥：
+
+1. 打开 <https://www.ttastro.com/ttskyannot/key>，用邀请码或 GitHub 登录领取；
+2. 把密钥填进「设置 → 在线解析密钥（可选）」，确定；
+3. 之后解析请求会带 `X-API-Key`，额度是**每小时 150 次、每天 600 次**。
+
+密钥保存在程序目录的 `config.json`（`api_key` 字段），换电脑时连同文件夹一起拷走即可。密钥无效或过期时
+在线解析会返回 401，额度用完返回 429 并提示去领密钥——这两种情况都可以直接改走本机 ASTAP。
+
 ### 优先复用文件里已有的解
 
 ASIAIR、NINA、PixInsight 在拍摄或处理时通常已经把**完整的天体测量解**写进文件头（`CTYPE1/2`、`CRVAL1/2`、

@@ -25,6 +25,9 @@ Write-Host "== uploading $PageDir" -ForegroundColor Cyan
 if (Test-Path (Join-Path $PageDir "img")) {
     & scp @sshOpts (Join-Path $PageDir "img\*") "${Remote}:/tmp/ttskyannot-page/img/" | Out-Null
 }
+if (Test-Path (Join-Path $PageDir "key.html")) {
+    & scp @sshOpts (Join-Path $PageDir "key.html") "${Remote}:/tmp/ttskyannot-page/" | Out-Null
+}
 if (Test-Path (Join-Path $PageDir "en\index.html")) {
     & scp @sshOpts (Join-Path $PageDir "en\index.html") "${Remote}:/tmp/ttskyannot-page/en/" | Out-Null
 }
@@ -33,6 +36,7 @@ if ($LASTEXITCODE -ne 0) { throw "scp failed" }
 $cmd = "sudo install -d -o www-data -g www-data '$RemoteDir' '$RemoteDir/img' '$RemoteDir/en' && " +
        "sudo cp -f /tmp/ttskyannot-page/index.html '$RemoteDir/index.html' && " +
        "sudo cp -f /tmp/ttskyannot-page/img/*.jpg '$RemoteDir/img/' && " +
+       "sudo cp -f /tmp/ttskyannot-page/key.html '$RemoteDir/key.html' && " +
        "sudo cp -f /tmp/ttskyannot-page/en/index.html '$RemoteDir/en/index.html' && " +
        "sudo chown -R www-data:www-data '$RemoteDir' && " +
        "ls -l '$RemoteDir' '$RemoteDir/en'"
