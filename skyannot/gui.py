@@ -33,7 +33,7 @@ from PyQt5.QtWidgets import (QAbstractButton, QAbstractItemView, QAction, QAppli
                              QGraphicsScene, QGraphicsSimpleTextItem, QGraphicsView, QGridLayout, QHBoxLayout,
                              QHeaderView, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QMenu,
                              QMessageBox, QPlainTextEdit, QProgressBar, QProgressDialog, QProxyStyle, QPushButton,
-                             QSizeGrip,
+                             QScrollArea, QSizeGrip,
                              QSizePolicy, QSpinBox, QStyle, QTableWidget, QTableWidgetItem, QToolBar, QToolButton,
                              QVBoxLayout, QWidget)
 
@@ -1507,6 +1507,20 @@ class SettingsDialog(FramedDialog):
         f = QFormLayout()
         f.setContentsMargins(0, 0, 0, 0)
         f.setSpacing(SP["3"])
+
+        def section(text):
+            """A caption between groups of settings; QLabel#section brings its own top padding."""
+            space = QWidget()
+            space.setFixedHeight(6)
+            space.setAttribute(Qt.WA_TranslucentBackground)
+            f.addRow(space)
+            lb = QLabel(t(text))
+            lb.setObjectName("section")
+            f.addRow(lb)
+            return lb
+
+        # ── 界面 ─────────────────────────────────────────────────────────────────────────────
+        section("界面")
         self.lang = QComboBox()
         for code, name in (("", t("跟随系统")), ("zh", "中文"), ("en", "English")):
             self.lang.addItem(name, code)
@@ -1526,6 +1540,23 @@ class SettingsDialog(FramedDialog):
         theme_row.addStretch(1)
         self.theme_switch.toggled.connect(self._theme_chosen)
         f.addRow(t("界面配色"), theme_row)
+        self.chk_confirm_del = _toggle(self, t("删除图像前先确认"), bool(cfg.get("confirm_delete", True)))
+        self.chk_confirm_del.setStyleSheet(TOGGLE_QSS)
+        self.chk_confirm_del.setToolTip(t("关掉后按删除键就直接移入回收站（仍可撤销）"))
+        f.addRow(t("删除确认"), self.chk_confirm_del)
+
+        # ── 解析 ─────────────────────────────────────────────────────────────────────────────
+        section("解析")
+        self.chk_existing = _toggle(self, t("复用文件头里已有的解"), bool(cfg.get("use_existing", True)))
+        self.chk_existing.setStyleSheet(TOGGLE_QSS)
+        self.chk_existing.setToolTip(t("文件里已经带天体测量解时（ASIAIR/NINA/PixInsight 都会写），"
+                                       "先和画面里的星点核对，对得上就直接用，省掉整轮解析。"))
+        f.addRow(t("已有解"), self.chk_existing)
+        self.chk_debayer = _toggle(self, t("自动解拜耳单次彩色图像"), bool(cfg.get("debayer", True)))
+        self.chk_debayer.setStyleSheet(TOGGLE_QSS)
+        self.chk_debayer.setToolTip(t("单次彩色相机的原始帧是单通道的马赛克；开启后自动插值成彩色再显示。"
+                                      "关掉可查看原始马赛克数据。"))
+        f.addRow(t("解拜耳"), self.chk_debayer)
         self.apikey = QLineEdit(cfg.get("api_key", ""))
         self.apikey.setEchoMode(QLineEdit.PasswordEchoOnEdit)
         self.apikey.setPlaceholderText(t("ttsky_…（点「领取密钥」免费获取）"))
@@ -1535,67 +1566,48 @@ class SettingsDialog(FramedDialog):
         b_key.setToolTip(t("在浏览器中打开领取页面（免费）"))
         b_key.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(KEYS_URL)))
         row_key = QHBoxLayout()
+        row_key.setContentsMargins(0, 0, 0, 0)
         row_key.addWidget(self.apikey)
         row_key.addWidget(b_key)
-        f.addRow(t("在线解析密钥(可选)"), row_key)
-        self.nova = QLineEdit(cfg.get("nova_api_key", ""))
-        self.nova.setEchoMode(QLineEdit.PasswordEchoOnEdit)
-        f.addRow(t("nova.astrometry.net API key(可选,最后的兜底)"), self.nova)
+        f.addRow(t("在线解析密钥"), row_key)
         self.astap = QLineEdit(cfg.get("astap_path", ""))
         b = QPushButton(t("浏览…"))
         b.clicked.connect(lambda: self._browse(self.astap, file=True))
         row = QHBoxLayout()
+        row.setContentsMargins(0, 0, 0, 0)
         row.addWidget(self.astap)
         row.addWidget(b)
-        f.addRow(t("ASTAP 路径(可选,离线解析)"), row)
-        self.pi = QLineEdit(cfg.get("pixinsight_path", ""))
-        b_pi = QPushButton(t("浏览…"))
-        b_pi.clicked.connect(lambda: self._browse(self.pi, file=True))
-        row_pi = QHBoxLayout()
-        row_pi.addWidget(self.pi)
-        row_pi.addWidget(b_pi)
-        f.addRow(t("PixInsight 路径(留空 = 自动查找)"), row_pi)
-        self.tw = QLineEdit(cfg.get("tickwhale_base", ""))
-        self.tw.setPlaceholderText("https://app.tickwhale.com")
-        self.tw.setToolTip(t("在线天体库地址。填了它，天体名输入框会在本地星表之外再查这个库"
-                             "（LBN/LDN 等本地没有的编号都在那里）；留空则只查本地星表。"))
-        f.addRow(t("在线天体库(留空 = 关闭)"), self.tw)
-        self.upd = QLineEdit(cfg.get("update_url", ""))
-        self.upd.setPlaceholderText("https://…  /  \\\\server\\share\\updates  /  E:\\updates")
-        self.upd.setToolTip(t("更新源：放着 version.json 的地址、网络共享或文件夹。留空则启动时不检查更新，"
-                              "仍可用状态栏的「检查更新」手动查。"))
-        b_upd = QPushButton(t("浏览…"))
-        b_upd.clicked.connect(lambda: self._browse(self.upd, file=False))
-        row_upd = QHBoxLayout()
-        row_upd.addWidget(self.upd)
-        row_upd.addWidget(b_upd)
-        f.addRow(t("更新源(留空 = 关闭)"), row_upd)
-        self.chk_confirm_del = _toggle(self, t("删除图像前先确认"), bool(cfg.get("confirm_delete", True)))
-        self.chk_confirm_del.setStyleSheet(TOGGLE_QSS)
-        self.chk_confirm_del.setToolTip(t("关掉后按删除键就直接移入回收站（仍可撤销）"))
-        f.addRow(t("删除确认"), self.chk_confirm_del)
-        self.chk_debayer = _toggle(self, t("自动解拜耳单次彩色图像"), bool(cfg.get("debayer", True)))
-        self.chk_debayer.setStyleSheet(TOGGLE_QSS)
-        self.chk_debayer.setToolTip(t("单次彩色相机的原始帧是单通道的马赛克；开启后自动插值成彩色再显示。"
-                                      "关掉可查看原始马赛克数据。"))
-        f.addRow(t("解拜耳"), self.chk_debayer)
-        self.chk_existing = _toggle(self, t("复用文件头里已有的解"), bool(cfg.get("use_existing", True)))
-        self.chk_existing.setStyleSheet(TOGGLE_QSS)
-        self.chk_existing.setToolTip(t("文件里已经带天体测量解时（ASIAIR/NINA/PixInsight 都会写），"
-                                       "先和画面里的星点核对，对得上就直接用，省掉整轮解析。"))
-        f.addRow(t("已有解"), self.chk_existing)
+        f.addRow(t("ASTAP 路径"), row)
+        self.nova = QLineEdit(cfg.get("nova_api_key", ""))
+        self.nova.setEchoMode(QLineEdit.PasswordEchoOnEdit)
+        f.addRow(t("nova API key"), self.nova)
+
+        # ── 星表与天体库 ─────────────────────────────────────────────────────────────────────
+        section("星表与天体库")
         self.gmag = DoubleSpinBox()
         self.gmag.setRange(8, 21)
         self.gmag.setDecimals(1)
         self.gmag.setValue(float(cfg.get("gaia_mag", 16)))
         f.addRow(t("Gaia 星等上限"), self.gmag)
+        self.tw = QLineEdit(cfg.get("tickwhale_base", ""))
+        self.tw.setPlaceholderText("https://app.tickwhale.com")
+        self.tw.setToolTip(t("在线天体库地址。填了它，天体名输入框会在本地星表之外再查这个库"
+                             "（LBN/LDN 等本地没有的编号都在那里）；留空则只查本地星表。"))
+        f.addRow(t("在线天体库"), self.tw)
+
+        # ── 输出 ─────────────────────────────────────────────────────────────────────────────
+        section("输出")
         self.out = QLineEdit(cfg.get("out_dir", ""))
         b2 = QPushButton(t("浏览…"))
         b2.clicked.connect(lambda: self._browse(self.out, file=False))
         row2 = QHBoxLayout()
+        row2.setContentsMargins(0, 0, 0, 0)
         row2.addWidget(self.out)
         row2.addWidget(b2)
-        f.addRow(t("输出位置(留空 = 图片所在文件夹)"), row2)
+        f.addRow(t("输出位置"), row2)
+
+        # ── 查看与打开 ──────────────────────────────────────────────────────────────────────
+        section("查看与打开")
         self.slide = DoubleSpinBox()
         self.slide.setRange(0.3, 60.0)
         self.slide.setDecimals(1)
@@ -1603,13 +1615,50 @@ class SettingsDialog(FramedDialog):
         self.slide.setSuffix(t(" 秒"))
         self.slide.setValue(float(cfg.get("slide_interval", 2.0)))
         f.addRow(t("自动播放间隔"), self.slide)
+        self.pi = QLineEdit(cfg.get("pixinsight_path", ""))
+        b_pi = QPushButton(t("浏览…"))
+        b_pi.clicked.connect(lambda: self._browse(self.pi, file=True))
+        row_pi = QHBoxLayout()
+        row_pi.setContentsMargins(0, 0, 0, 0)
+        row_pi.addWidget(self.pi)
+        row_pi.addWidget(b_pi)
+        f.addRow(t("PixInsight 路径"), row_pi)
+
+        # ── 更新 ─────────────────────────────────────────────────────────────────────────────
+        section("更新")
+        self.upd = QLineEdit(cfg.get("update_url", ""))
+        self.upd.setToolTip(t("更新源：放着 version.json 的地址、网络共享或文件夹。留空则启动时不检查更新，"
+                              "仍可用状态栏的「检查更新」手动查。"))
+        b_upd = QPushButton(t("浏览…"))
+        b_upd.clicked.connect(lambda: self._browse(self.upd, file=False))
+        row_upd = QHBoxLayout()
+        row_upd.setContentsMargins(0, 0, 0, 0)
+        row_upd.addWidget(self.upd)
+        row_upd.addWidget(b_upd)
+        f.addRow(t("更新源"), row_upd)
+
         bb = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         bb.button(QDialogButtonBox.Ok).setText(t("确定"))
         bb.button(QDialogButtonBox.Cancel).setText(t("取消"))
         bb.accepted.connect(self.accept)
         bb.rejected.connect(self.reject)
-        f.addRow(bb)
-        self.body.addLayout(f)
+        # six groups are taller than a 768-pixel screen: scroll the form, keep the buttons in reach
+        inner = QWidget()
+        inner.setAttribute(Qt.WA_TranslucentBackground)
+        inner.setLayout(f)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll.setWidget(inner)
+        scroll.setMinimumHeight(560)
+        scroll.setMaximumHeight(620)
+        scroll.setMinimumWidth(520)
+        scroll.setStyleSheet('QScrollArea{background:transparent;border:none}')
+        scroll.viewport().setAutoFillBackground(False)
+        inner.setStyleSheet('background:transparent')
+        self.body.addWidget(scroll, 1)
+        self.body.addWidget(bb)
 
     def _browse(self, edit, file):
         p = (QFileDialog.getOpenFileName(self, "", edit.text())[0] if file
@@ -2388,9 +2437,9 @@ class MainWindow(QMainWindow):
         self._files_action.setToolTip(t("显示或隐藏左侧的同目录图片列表"))
 
     def _build_panel(self):
-        """The annotation panel: the queue at the top, then what to annotate, then what to write, then the
-        two actions. Sections are headed by an accent label and the controls sit in a fixed-width column, so
-        the panel does not look ragged when it is widened."""
+        """The annotation panel, in the order the work is done: the queue, the target hint, the star
+        catalogues, what to draw, how to draw it, what to write, then the actions. Each group carries a quiet
+        caption and the controls sit in one column, so the panel reads the same at any dock width."""
         dock = QDockWidget(t("标注"), self)
         dock.setFeatures(QDockWidget.DockWidgetMovable | QDockWidget.DockWidgetFloatable)
         w = QWidget()
@@ -2399,50 +2448,45 @@ class MainWindow(QMainWindow):
         lay.setContentsMargins(8, 8, 8, 8)
         lay.setSpacing(5)
 
-        def heading(text, bar=False):
-            """A group heading. `bar` draws it as the design's section stripe, used for the queue at the top
-            of the panel; the rest are quiet captions, so only one element shouts on the panel."""
-            lb = QLabel(t(text))
-            if bar:
-                lb.setStyleSheet(SUBTITLE_QSS)
-            else:
-                lb.setObjectName("section")        # styled by PANEL_QSS
-            lay.addWidget(lb)
-            return lb
-
-        self.lbl_queue = heading("打开历史", bar=True)
+        # the queue: the one element that shouts, because it is what the panel is for
+        self.lbl_queue = QLabel(t("打开历史"))
+        self.lbl_queue.setStyleSheet(SUBTITLE_QSS)
         self.lbl_queue.setToolTip(t("打开过的图片会按顺序记在这里，之后可以一起解析；在左栏点选或翻页看过的图"
                                     "也会自动加进来"))
+        lay.addWidget(self.lbl_queue)
         self.list = QListWidget()
         self.list.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.list.setStyleSheet(_list_qss(self))
         self.list.currentRowChanged.connect(self._row_changed)
         self.list.setContextMenuPolicy(Qt.CustomContextMenu)
         self.list.customContextMenuRequested.connect(lambda pos: self._list_menu(pos, self.list))
-        # four rows is the least that reads as a history rather than a stray box; the queue is the panel's
-        # main object, so it takes the spare height ahead of the log below it
         self.list.setMinimumHeight(4 * _list_row_height(self.list) + 10)
         lay.addWidget(self.list, 5)                # the queue takes the panel's spare height
+        lay.addSpacing(4)                          # air between the queue and the first caption
 
-        # one column of controls, laid out from the left edge so it keeps its shape at any dock width
+        # everything below is added in order to this column; the layout is placed once, here
         self.controls = QVBoxLayout()
         self.controls.setContentsMargins(0, 0, 0, 0)
-        self.controls.setSpacing(0)                # the section headings bring their own spacing
+        self.controls.setSpacing(6)
+        lay.addLayout(self.controls)
 
-        def gap(height=SECTION_GAP):
-            """Air between two blocks in this column.
+        def section(text):
+            """A group caption. QLabel#section brings its own top padding, so the rhythm is the caption's."""
+            lb = QLabel(t(text))
+            lb.setObjectName("section")
+            self.controls.addWidget(lb)
+            return lb
 
-            The column runs at zero spacing and the section headings carry their own top padding, which keeps
-            every heading equally far from what precedes it. Blocks that have no heading above them — the shape
-            row and the catalogue heading — would otherwise sit flush against their neighbour, so they ask for
-            the same gap explicitly.
-            """
-            w = QWidget()
-            w.setFixedHeight(height)
-            w.setAttribute(Qt.WA_TranslucentBackground)
-            self.controls.addWidget(w)
-            return w
+        def pill(text, tip, checked, handler):
+            c = _toggle(w, t(text), checked)
+            c.setStyleSheet(TOGGLE_QSS)
+            if tip:
+                c.setToolTip(t(tip))
+            c.toggled.connect(handler)
+            return c
 
+        # ── 目标：解析提示 ────────────────────────────────────────────────────────────────────
+        self.lbl_target = section("目标")
         forms = QFormLayout()
         forms.setContentsMargins(0, 0, 0, 0)
         forms.setSpacing(6)
@@ -2462,92 +2506,13 @@ class MainWindow(QMainWindow):
                                    "例：05 34 31.9 +22 00 52，也接受 05:34:31.9 +22:00:52"))
         self.ed_coord.editingFinished.connect(self._coord_entered)
         forms.addRow(t("中心坐标"), self.ed_coord)
-        lay.addLayout(forms)
+        self.controls.addLayout(forms)
 
-        heading("标注内容")
-        # What the colours on the picture mean; each object also takes a shade of its own inside the family.
-        legend = QLabel("&nbsp;&nbsp;".join(
-            "<span style='color:%s'>●</span> %s" % (style.CATEGORY_COLORS[k], t(name))
-            for k, name in (("galaxy", "星系"), ("nebula", "星云"), ("cluster", "星团"), ("dark", "暗星云"))))
-        legend.setTextFormat(Qt.RichText)
-        legend.setObjectName("note")
-        legend.setToolTip(t("颜色按天体类型：同一类型里的每个天体再取属于自己的深浅"))
-        lay.addWidget(legend)
-        self.chk_groups = {}
-        saved = self.cfg.get("groups")              # None = never saved: everything starts on
-        # the star names and the grid are not catalogues, so they are not part of the precedence list and are
-        # switched separately. "grid" and "named" keep their historical config keys.
-        #
-        # An older config carries type keys ("galaxy", "nebula") and no catalogue key at all; taking that
-        # literally would start the program with nothing switched on, so an unrecognised value means "all on".
-        fresh = saved is None or not any(k in saved for k, _t in GROUPS)
-
-        def is_on(key):
-            return fresh or key in saved
-        role_col = QVBoxLayout()
-        role_col.setContentsMargins(0, 0, 0, 0)
-        role_col.setSpacing(5)
-        for i in range(0, len(GROUPS), 3):          # three per row: the labels are short
-            row = QHBoxLayout()
-            row.setSpacing(5)
-            for key, text in GROUPS[i:i + 3]:
-                c = _toggle(w, t(text), is_on(key))
-                c.setStyleSheet(TOGGLE_QSS)
-                c.setToolTip(t(catalogue.NOTES[key]))
-                c.toggled.connect(self._groups_changed)
-                self.chk_groups[key] = c
-                row.addWidget(c)                   # natural width: the pills hug their own text
-            row.addStretch(1)                      # and the row stays left-aligned
-            role_col.addLayout(row)
-        extras = QHBoxLayout()
-        extras.setSpacing(5)
-        self.chk_extra = {}
-        for key, text in (("named", "亮星名"), ("grid", "坐标网格")):
-            c = _toggle(w, t(text), is_on(key))     # on by default, same as the catalogues
-            c.setStyleSheet(TOGGLE_QSS)
-            c.setToolTip(t("和星表无关，单独开关；默认开启"))
-            c.toggled.connect(self._groups_changed)
-            self.chk_extra[key] = c
-            extras.addWidget(c)
-        extras.addStretch(1)
-        role_col.addLayout(extras)
-        self.controls.addLayout(role_col)
-        gap()
-        row = QHBoxLayout()
-        row.setSpacing(8)
-        row.addWidget(QLabel(t("天体形状")))
-        self.cmb_shape = QComboBox()
-        for text, key in (("轮廓线", "outline"), ("圆圈", "circle")):
-            self.cmb_shape.addItem(t(text), key)
-        self.cmb_shape.setCurrentIndex(max(0, self.cmb_shape.findData(self.cfg.get("shape_style", "outline"))))
-        self.cmb_shape.setToolTip(t("轮廓线：有轮廓数据的星云按实际形状描边。圆圈：一律按星表尺寸画圆，长条形天体画成椭圆。"))
-        self.cmb_shape.currentIndexChanged.connect(self._shape_changed)
-        row.addWidget(self.cmb_shape, 1)
-        self.controls.addLayout(row)
-        gap()
-
-        # The colours of a one-shot colour sensor, for a frame whose header does not say which arrangement it
-        # used. Only meaningful for a single-channel mosaic, so it stays disabled until one is on screen:
-        # applying it to an RGB frame would reinterpret colour that is already there.
-        row = QHBoxLayout()
-        row.setSpacing(8)
-        self.lbl_bayer = QLabel(t("拜耳阵列"))
-        row.addWidget(self.lbl_bayer)
-        self.cmb_bayer = QComboBox()
-        self.cmb_bayer.addItem(t("自动（按文件头）"), "auto")
-        for key in debayer.PATTERNS:
-            self.cmb_bayer.addItem(t(debayer.PATTERN_LABELS[key]), key)
-        self.cmb_bayer.setCurrentIndex(
-            max(0, self.cmb_bayer.findData(self.cfg.get("bayer_pattern", "auto"))))
-        self.cmb_bayer.setToolTip(t("彩色相机的未解拜耳帧如果文件头没写拜耳排列，就在这里指定。\n"
-                                    "只对单通道的彩色马赛克帧生效；已经解拜耳或本来就是单色的帧不受影响。"))
-        self.cmb_bayer.currentIndexChanged.connect(self._bayer_changed)
-        row.addWidget(self.cmb_bayer, 1)
-        self.controls.addLayout(row)
-        gap()
-        head = QHBoxLayout()                       # 星表 heading with the select all / none shortcut
+        # ── 解析星表 ──────────────────────────────────────────────────────────────────────────
+        head = QHBoxLayout()                       # heading with the select all / none shortcut
+        head.setContentsMargins(0, 0, 0, 0)
         head.setSpacing(6)
-        self.lbl_cats = QLabel(t("星表"))
+        self.lbl_cats = QLabel(t("解析星表"))
         self.lbl_cats.setObjectName("section")
         head.addWidget(self.lbl_cats)
         head.addStretch(1)
@@ -2566,25 +2531,101 @@ class MainWindow(QMainWindow):
         saved_cats = self.cfg.get("cats")
         saved_cats = list(vizier.CATALOGS) if saved_cats is None else list(saved_cats)
         cat_row = QHBoxLayout()
+        cat_row.setContentsMargins(0, 0, 0, 0)
         cat_row.setSpacing(6)
         for key, spec in vizier.CATALOGS.items():
-            c = _toggle(w, spec["label"], key in saved_cats,
-                        t("解析后写出 %s 星表（不勾就不查询、不写出）") % spec["block"])
-            c.setStyleSheet(TOGGLE_QSS)
-            c.toggled.connect(self._cats_changed)
+            c = pill(spec["label"], t("解析后写出 %s 星表（不勾就不查询、不写出）") % spec["block"],
+                     key in saved_cats, self._cats_changed)
             self.chk_cats[key] = c
             cat_row.addWidget(c)
         cat_row.addStretch(1)
         self.controls.addLayout(cat_row)
-        self.controls.addSpacing(5)
         self.lbl_named = QLabel(t("亮星表（NamedStars）始终写出"))
         self.lbl_named.setObjectName("note")
-        self.lbl_named.setWordWrap(True)           # it sits under the row, not beside it
+        self.lbl_named.setWordWrap(True)
         self.controls.addWidget(self.lbl_named)
-        self.controls.addSpacing(3)
         self._cats_changed()                       # show the count from the start
 
-        heading("输出")
+        # ── 标注内容：画什么 ──────────────────────────────────────────────────────────────────
+        self.lbl_anno = section("标注内容")
+        legend = QLabel("&nbsp;&nbsp;".join(
+            "<span style='color:%s'>●</span> %s" % (style.CATEGORY_COLORS[k], t(name))
+            for k, name in (("galaxy", "星系"), ("nebula", "星云"), ("cluster", "星团"), ("dark", "暗星云"))))
+        legend.setTextFormat(Qt.RichText)
+        legend.setObjectName("note")
+        legend.setToolTip(t("颜色按天体类型：同一类型里的每个天体再取属于自己的深浅"))
+        self.controls.addWidget(legend)
+
+        self.chk_groups = {}
+        saved = self.cfg.get("groups")              # None = never saved: everything starts on
+        # the star names and the grid are not catalogues, so they are not part of the precedence list and are
+        # switched separately. "grid" and "named" keep their historical config keys.
+        #
+        # An older config carries type keys ("galaxy", "nebula") and no catalogue key at all; taking that
+        # literally would start the program with nothing switched on, so an unrecognised value means "all on".
+        fresh = saved is None or not any(k in saved for k, _t in GROUPS)
+
+        def is_on(key):
+            return fresh or key in saved
+        role_col = QVBoxLayout()
+        role_col.setContentsMargins(0, 0, 0, 0)
+        role_col.setSpacing(5)
+        for i in range(0, len(GROUPS), 3):          # three per row: the labels are short
+            row = QHBoxLayout()
+            row.setSpacing(5)
+            for key, text in GROUPS[i:i + 3]:
+                c = pill(text, catalogue.NOTES[key], is_on(key), self._groups_changed)
+                self.chk_groups[key] = c
+                row.addWidget(c)                   # natural width: the pills hug their own text
+            row.addStretch(1)                      # and the row stays left-aligned
+            role_col.addLayout(row)
+        extras = QHBoxLayout()
+        extras.setSpacing(5)
+        self.chk_extra = {}
+        for key, text in (("named", "亮星名"), ("grid", "坐标网格")):
+            c = pill(text, t("和星表无关，单独开关；默认开启"), is_on(key), self._groups_changed)
+            self.chk_extra[key] = c
+            extras.addWidget(c)
+        extras.addStretch(1)
+        role_col.addLayout(extras)
+        self.controls.addLayout(role_col)
+
+        # ── 显示：怎么画 ─────────────────────────────────────────────────────────────────────
+        self.lbl_shape = section("显示")
+        row = QHBoxLayout()
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(8)
+        row.addWidget(QLabel(t("天体形状")))
+        self.cmb_shape = QComboBox()
+        for text, key in (("轮廓线", "outline"), ("圆圈", "circle")):
+            self.cmb_shape.addItem(t(text), key)
+        self.cmb_shape.setCurrentIndex(max(0, self.cmb_shape.findData(self.cfg.get("shape_style", "outline"))))
+        self.cmb_shape.setToolTip(t("轮廓线：有轮廓数据的星云按实际形状描边。圆圈：一律按星表尺寸画圆，长条形天体画成椭圆。"))
+        self.cmb_shape.currentIndexChanged.connect(self._shape_changed)
+        row.addWidget(self.cmb_shape, 1)
+        self.controls.addLayout(row)
+
+        # The colours of a one-shot colour sensor, for a frame whose header does not say which arrangement it
+        # used. Only meaningful for a single-channel mosaic, so it stays disabled until one is on screen.
+        row = QHBoxLayout()
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(8)
+        self.lbl_bayer = QLabel(t("拜耳阵列"))
+        row.addWidget(self.lbl_bayer)
+        self.cmb_bayer = QComboBox()
+        self.cmb_bayer.addItem(t("自动（按文件头）"), "auto")
+        for key in debayer.PATTERNS:
+            self.cmb_bayer.addItem(t(debayer.PATTERN_LABELS[key]), key)
+        self.cmb_bayer.setCurrentIndex(
+            max(0, self.cmb_bayer.findData(self.cfg.get("bayer_pattern", "auto"))))
+        self.cmb_bayer.setToolTip(t("彩色相机的未解拜耳帧如果文件头没写拜耳排列，就在这里指定。\n"
+                                    "只对单通道的彩色马赛克帧生效；已经解拜耳或本来就是单色的帧不受影响。"))
+        self.cmb_bayer.currentIndexChanged.connect(self._bayer_changed)
+        row.addWidget(self.cmb_bayer, 1)
+        self.controls.addLayout(row)
+
+        # ── 输出：写什么 ─────────────────────────────────────────────────────────────────────
+        self.lbl_out = section("输出")
         self.chk = {}
         out_grid = QGridLayout()                   # two across: four switches in four rows made the panel tall
         out_grid.setContentsMargins(0, 0, 0, 0)
@@ -2596,28 +2637,32 @@ class MainWindow(QMainWindow):
                 ("write_outlines", "轮廓坐标文件", ""),
                 ("write_wcs", "解析结果写回图片",
                  "写回会修改原文件的文件头(像素不动)。FITS/XISF 写进文件头,JPG/PNG/TIFF 另存同名 .wcs 文件。"))):
-            c = _toggle(w, t(text), bool(self.cfg.get(key, True)), t(tip) if tip else "")
-            c.setStyleSheet(TOGGLE_QSS)
+            c = pill(text, tip, bool(self.cfg.get(key, True)), self._output_changed)
             self.chk[key] = c
             out_grid.addWidget(c, i // 2, i % 2, Qt.AlignLeft)
         self.controls.addLayout(out_grid)
 
-        lay.addLayout(self.controls)
-        lay.addSpacing(8)                          # a little air before the actions
+        # ── 动作 ─────────────────────────────────────────────────────────────────────────────
+        lay.addSpacing(10)                         # a little air before the actions
         self.btn_start = QPushButton(t("解析并标注"))
         self.btn_start.setStyleSheet(BUTTON_QSS)
         self.btn_start.clicked.connect(self.start)
         lay.addWidget(self.btn_start)
+
+        row = QHBoxLayout()
+        row.setSpacing(6)
         self.btn_save = QPushButton(t("保存当前结果"))
         self.btn_save.setToolTip(t("把这张图的解析结果写到磁盘（解析本身不写任何文件）"))
         self.btn_save.clicked.connect(self.save_current)
         self.btn_save.setEnabled(False)
-        lay.addWidget(self.btn_save)
         self.btn_pi = QPushButton(t("在 PixInsight 中打开"))
         self.btn_pi.setToolTip(t("用 PixInsight 打开当前显示的原图（XISF/FITS 保留文件头，不做任何改动）"))
         self.btn_pi.clicked.connect(self.open_in_pixinsight)
-        self.btn_pi.setEnabled(False)                  # nothing to open before an image is shown
-        lay.addWidget(self.btn_pi)
+        self.btn_pi.setEnabled(False)              # nothing to open before an image is shown
+        row.addWidget(self.btn_save)
+        row.addWidget(self.btn_pi)
+        lay.addLayout(row)
+
         self.prog = QProgressBar()
         self.prog.setRange(0, 1000)
         self.prog.setTextVisible(False)
@@ -2626,6 +2671,7 @@ class MainWindow(QMainWindow):
         self.logbox = QPlainTextEdit()
         self.logbox.setReadOnly(True)
         self.logbox.setMaximumBlockCount(4000)
+        self.logbox.setMinimumHeight(84)           # the sections above are tall; the log still gets a few lines
         lay.addWidget(self.logbox, 3)
         self.btn_folder = QPushButton(t("打开输出文件夹"))
         self.btn_folder.clicked.connect(self.open_folder)
@@ -2926,7 +2972,13 @@ class MainWindow(QMainWindow):
     def _cats_changed(self):
         """Which star catalogues take part: what is switched off is not even queried."""
         self.cfg["cats"] = list(self._cats_on())
-        self.lbl_cats.setText("%s (%d/%d)" % (t("星表"), len(self.cfg["cats"]), len(vizier.CATALOGS)))
+        self.lbl_cats.setText("%s (%d/%d)" % (t("解析星表"), len(self.cfg["cats"]), len(vizier.CATALOGS)))
+
+    def _output_changed(self):
+        """Remember which files to offer to write; the actual choice is confirmed per image."""
+        for key in ("write_txt", "write_preview", "write_outlines", "write_wcs"):
+            self.cfg[key] = self.chk[key].isChecked()
+        self._update_save_button()
 
     def _cats_all(self, on):
         for c in self.chk_cats.values():
