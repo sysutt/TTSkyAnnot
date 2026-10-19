@@ -163,6 +163,9 @@ if (-not $SkipInstaller) {
                 } else {
                     $live = & curl.exe -s -o NUL -w "%{http_code} %{size_download}" ($SetupBase + "TTSkyAnnot-Setup.exe")
                     Write-Host ("   live: " + $live) -ForegroundColor Green
+                    # keep the two newest installers on the server as well
+                    $prune = "cd '$RemoteSetup' && ls -1t TTSkyAnnot-Setup-*.exe | tail -n +3 | xargs -r sudo rm -f"
+                    & ssh @sshOpts $Remote $prune | Out-Null
                 }
             }
         }
