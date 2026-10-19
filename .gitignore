@@ -17,3 +17,4 @@ updates/
 packaging/zone-file-backup.txt
 .scratch*/
 .testfeed/
+setup/
