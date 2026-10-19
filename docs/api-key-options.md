@@ -144,3 +144,63 @@
 4. 小程序链路零改动，符合“不影响小程序”的约束。
 
 如果希望**完全不收集身份**，则选择 A（PoW）+ 严格匿名额度；但一旦需要按用户限额或封禁，最终还是会回到 key。
+
+
+---
+
+## 四、实施记录（2026-10-20）
+
+### 已上线
+
+| 项 | 位置 | 状态 |
+|---|---|---|
+| nginx 入口限速（4 r/s，burst 6，429） | `/etc/nginx/conf.d/ttskyannot-limits.conf` | 已生效，jiaowa 的 IP 不计入 |
+| 服务端分级限流 + 解析槽预算 | `interactions_service.py` | 已生效 |
+| API Key 表、邀请码表 | `interactions.db`（`api_keys` / `invites`） | 已建 |
+| 领取接口 | `POST /api/i/key/redeem`（邀请码）、`/key/github`、`/key/wechat` | 已上线 |
+| 公开配置 | `GET /api/i/key/config`（只返回 client id / appid 是否存在） | 已上线 |
+| 密钥校验 | 解析请求头 `X-API-Key`；无效 401，超额 429 + `Retry-After` | 已上线 |
+| 命令行管理 | `/home/ubuntu/key_admin.py invite/key/list/revoke` | 已有 |
+| 桌面端 | 0.2.5：设置「在线解析密钥」，请求带 `X-API-Key` + UA | 已发布 |
+| 领取页 | <https://www.ttastro.com/ttskyannot/key> | 已上线 |
+
+### 额度
+
+- 密钥：每小时 150 次、每天 600 次（`KEY_QUOTAS["free"]`）；
+- 匿名（没有密钥的桌面端）：每小时 6 次、每天 20 次（环境变量 `TTASTRO_ANON_HOUR` / `TTASTRO_ANON_DAY`，默认值即此）；
+- 小程序池（jiaowa 的来源 IP）：不受匿名额度影响，保持每分钟 300 次 + 解析槽 450 秒/10 分钟；
+- 全局：每分钟 90 次、盲解每小时 12 次。
+
+### 还需要配置才能启用
+
+**GitHub 登录**：在 GitHub 建一个 OAuth App（回调地址填 `https://www.ttastro.com/ttskyannot/key`），
+然后给服务加环境变量并重启：
+
+```
+sudo systemctl edit ttastro-interactions
+# [Service]
+# Environment=TT_GITHUB_ID=Ov23...
+# Environment=TT_GITHUB_SECRET=...
+sudo systemctl restart ttastro-interactions
+```
+
+配置后 `/api/i/key/config` 会返回 `github: true`，领取页上的 GitHub 按钮自动出现。
+
+**微信登录（网站扫码）**：需要微信开放平台的「网站应用」（要认证），拿到 AppID/AppSecret 后同样加
+`TT_WX_APPID` / `TT_WX_SECRET`。回调地址同样是 `https://www.ttastro.com/ttskyannot/key`。
+**小程序内一键领 key** 走的是另一条链路：由 jiaowa 增加一个 `a=key_issue` 动作（用小程序 openid 作为 owner），
+这样不需要开放平台的网站应用。
+
+**jiaowa 的服务密钥**：已在服务器生成并存于 `/home/ubuntu/.jiaowa_key`（600 权限，只有 jiaowa 的服务端需要读到）。
+启用步骤：
+1. jiaowa 转发 `/api/i/solve` 时加上 `X-API-Key: <那个值>`；
+2. 之后 ttastro 会把小程序请求记为 service 密钥（每小时 1200 次、每天 20000 次）；
+3. 确认 Mini Program 正常后，可以把“小程序池”的 IP 兜底收紧，只信任带服务密钥的转发。
+
+### 运维
+
+- 备份：改动前已备份到 `/root/ttastro.nginx.bak-*`、`/home/ubuntu/interactions_service.py.bak-*`；
+- 查看密钥：`python3 /home/ubuntu/key_admin.py list`；
+- 吊销：`python3 /home/ubuntu/key_admin.py revoke <id>`；
+- 发邀请码：`python3 /home/ubuntu/key_admin.py invite 5 --note "..."`；
+- 日志：`sudo journalctl -u ttastro-interactions | grep solve`，每行包含 IP、是否小程序池、密钥标签、耗时、UA。
