@@ -184,8 +184,9 @@ nonce（约 6.5 万次 SHA-256，页面上一两秒），再提交给 `/api/i/ke
 
 ### 还需要配置才能启用
 
-**GitHub 登录**：在 GitHub 建一个 OAuth App（回调地址填 `https://www.ttastro.com/ttskyannot/key`），
-然后给服务加环境变量并重启：
+**GitHub 登录**：已配置（2026-10-20，OAuth App 回调地址 `https://www.ttastro.com/ttskyannot/key`，
+Client ID `Ov23liF3HCCeTBZjwXHN`，secret 在 `ttastro-interactions.service.d/20-oauth.conf`，600 权限）。
+如果要换 App 或换 secret，改这个文件并重启：
 
 ```
 sudo systemctl edit ttastro-interactions
