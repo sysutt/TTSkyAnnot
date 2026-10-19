@@ -135,6 +135,7 @@ def set_theme(name: str) -> None:
 # The order is the precedence order — an object held by more than one catalogue (M31 is also NGC 224, NGC 7000
 # is also Sharpless 2-117) is listed under the first enabled one only, so it is never double-labelled.
 GROUPS = tuple((k, catalogue.LABELS[k]) for k in catalogue.KEYS)
+KEYS_URL = "https://www.ttastro.com/ttskyannot/key"      # where a free online-solve key comes from
 _SUPPORTED = frozenset(imageio.SUPPORTED)
 
 # Styles that depend on the palette are built by _restyle(), which runs at import and whenever the theme
@@ -1527,10 +1528,16 @@ class SettingsDialog(FramedDialog):
         f.addRow(t("界面配色"), theme_row)
         self.apikey = QLineEdit(cfg.get("api_key", ""))
         self.apikey.setEchoMode(QLineEdit.PasswordEchoOnEdit)
-        self.apikey.setPlaceholderText("ttsky_…")
+        self.apikey.setPlaceholderText(t("ttsky_…（点「领取密钥」免费获取）"))
         self.apikey.setToolTip(t("在线解析密钥（ttastro）。留空只能用很少的匿名次数；"
                                  "在 ttastro.com/ttskyannot/key 可以免费领一个，填进这里即可。"))
-        f.addRow(t("在线解析密钥(可选)"), self.apikey)
+        b_key = QPushButton(t("领取密钥…"))
+        b_key.setToolTip(t("在浏览器中打开领取页面（免费）"))
+        b_key.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(KEYS_URL)))
+        row_key = QHBoxLayout()
+        row_key.addWidget(self.apikey)
+        row_key.addWidget(b_key)
+        f.addRow(t("在线解析密钥(可选)"), row_key)
         self.nova = QLineEdit(cfg.get("nova_api_key", ""))
         self.nova.setEchoMode(QLineEdit.PasswordEchoOnEdit)
         f.addRow(t("nova.astrometry.net API key(可选,最后的兜底)"), self.nova)
@@ -2163,6 +2170,7 @@ class MainWindow(QMainWindow):
         self.worker = None
         self.results = {}           # path -> Result
         self.overlay_data = {}      # path -> (shapes, named, grid)
+        self._key_offer_shown = False   # the "where do I get a key" box is offered once per session
         self._folder = None         # folder the left-hand list is showing
         self._folder_dirty = False  # a file was removed or moved: rebuild the list even for the same folder
         self._previews = {}         # folder -> (names as listed, names worth listing: previews dropped)
@@ -3336,6 +3344,21 @@ class MainWindow(QMainWindow):
                 # a blind solve on a processed wide field is the hardest case there is; a hint fixes it at once
                 self.logbox.appendPlainText(
                     t("可以在「天体名」里填目标（如 M33），或在「中心坐标」里填画面中心，解析器会快很多。"))
+            if not self._key_offer_shown and any(w in (res.error or "") for w in ("密钥", "额度")):
+                # the anonymous allowance is small on purpose: this is the moment to say where a key comes from
+                self._key_offer_shown = True
+                box = QMessageBox(self)
+                box.setIcon(QMessageBox.Information)
+                box.setWindowTitle(t("在线解析密钥"))
+                box.setText(t("在线解析需要一个免费密钥"))
+                box.setInformativeText("%s\n\n%s" % (
+                    t("匿名额度很小（每天 20 次）。用一个免费密钥可以解析到每小时 150 次、每天 600 次。"),
+                    t("密钥在网页上自助领取，填回「设置 → 在线解析密钥」即可。")))
+                open_btn = box.addButton(t("打开领取页面"), QMessageBox.AcceptRole)
+                box.addButton(t("稍后"), QMessageBox.RejectRole)
+                box.exec_()
+                if box.clickedButton() is open_btn:
+                    QDesktopServices.openUrl(QUrl(KEYS_URL))
 
     def _all_done(self):
         self.btn_start.setEnabled(True)
