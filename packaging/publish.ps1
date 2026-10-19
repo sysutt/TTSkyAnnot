@@ -43,6 +43,24 @@ try {
     ) -Wait -PassThru -NoNewWindow
     if ($rc.ExitCode -ge 8) { throw "robocopy failed with $($rc.ExitCode)" }
 
+    # a note in the zip: the usual reason a fresh copy will not start is that it was never really extracted
+    $readme = @"
+TTSkyAnnot $Version
+
+1. 把整个压缩包解压到一个普通文件夹（不要在压缩包里直接双击运行，也不要只复制 exe 出来）。
+2. 打开解压出来的 TTSkyAnnot.exe。程序是绿色版，不需要安装。
+
+运行时报 "DLL load failed while importing QtCore / 找不到指定的模块"，
+基本都是没有完整解压（缺少 _internal 文件夹），或者杀毒软件隔离了里面的文件。
+重新完整解压一次即可；仍然不行时，把杀毒软件的隔离区里 TTSkyAnnot 相关的文件恢复出来。
+
+The program is a portable one-folder build: extract the whole zip to a normal folder first,
+then run TTSkyAnnot.exe. Running the exe from inside the zip, or copying only the exe,
+gives "DLL load failed while importing QtCore".
+"@
+    [System.IO.File]::WriteAllText((Join-Path $stage "使用说明.txt"), $readme,
+        (New-Object System.Text.UTF8Encoding($true)))
+
     $zip = Join-Path $Feed "TTSkyAnnot-$Version.zip"
     if (Test-Path $zip) { Remove-Item $zip -Force }
     Add-Type -AssemblyName System.IO.Compression.FileSystem
