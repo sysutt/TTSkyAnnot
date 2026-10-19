@@ -24,6 +24,7 @@ class Options:
     solvers: tuple = ("ttastro", "astap", "nova")
     astap_path: str = ""
     nova_key: str = ""
+    api_key: str = ""                # ttastro online solve key (empty = anonymous allowance)
     gaia_mag: float = 16.0
     debayer: bool = True             # interpolate a one-shot colour mosaic before solving or annotating
     bayer_pattern: str = "auto"      # "auto" = the header's BAYERPAT, else one of debayer.PATTERNS
@@ -288,7 +289,7 @@ def solve(image_path: str, opt: Options, log=print, progress=lambda p, msg: None
             progress(0.15, "solve:" + name)
             try:
                 if name == "ttastro":
-                    w0, info = solver.solve_ttastro(st, img.width, img.height, hint, log=log)
+                    w0, info = solver.solve_ttastro(st, img.width, img.height, hint, log=log, api_key=opt.api_key)
                 elif name == "astap":
                     found = solver.find_astap(opt.astap_path)
                     if not found:

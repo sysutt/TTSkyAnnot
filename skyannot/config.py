@@ -42,6 +42,7 @@ DEFAULTS = {
     "write_outlines": True,
     "write_wcs": True,
     "out_dir": "",             # "" = next to the image
+    "api_key": "",                                   # online solve key (ttastro); empty = anonymous allowance
     "update_url": "https://www.ttastro.com/ttskyannot/updates/",
                                # where version.json lives; "" turns the startup check off
     "skipped_version": "",     # a version the user asked not to be told about again
