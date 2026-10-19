@@ -160,9 +160,20 @@
 | 领取接口 | `POST /api/i/key/redeem`（邀请码）、`/key/github`、`/key/wechat` | 已上线 |
 | 公开配置 | `GET /api/i/key/config`（只返回 client id / appid 是否存在） | 已上线 |
 | 密钥校验 | 解析请求头 `X-API-Key`；无效 401，超额 429 + `Retry-After` | 已上线 |
+| 自助领取 | `GET /api/i/key/challenge` + `POST /api/i/key/claim`（16 位前导零的工作量证明） | 已上线 |
 | 命令行管理 | `/home/ubuntu/key_admin.py invite/key/list/revoke` | 已有 |
 | 桌面端 | 0.2.5：设置「在线解析密钥」，请求带 `X-API-Key` + UA | 已发布 |
 | 领取页 | <https://www.ttastro.com/ttskyannot/key> | 已上线 |
+
+### 自助领取（不需要人工发邀请码）
+
+领取页第一个卡片就是「免费领取」：浏览器从 `/api/i/key/challenge` 拿一个随机 challenge，算出满足 16 位前导零的
+nonce（约 6.5 万次 SHA-256，页面上一两秒），再提交给 `/api/i/key/claim` 换一个密钥。
+
+- 每个来源网络每天 2 个，全局每小时 30 个；
+- challenge 一次性、5 分钟过期；
+- 密钥绑定到来源 IP 的哈希（`owner = ip:<hash>`），便于排查；
+- 邀请码仍然保留，用于定向发放；GitHub / 微信登录配置好之后是更强的身份入口。
 
 ### 额度
 
