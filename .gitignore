@@ -17,3 +17,4 @@ updates/
 packaging/$BACKUP_FILE.txt
 .scratch*/
 .testfeed/
+setup/
