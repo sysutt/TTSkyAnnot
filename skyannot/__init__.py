@@ -1,5 +1,6 @@
 ﻿"""TTSkyAnnot: astro image viewer, plate solver and annotator (GPL-3.0-or-later)."""
-__version__ = "0.2.8"
+__version__ = "0.2.9"
+
 
 
 

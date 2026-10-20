@@ -15,6 +15,7 @@ what makes the overlay readable. Only the grouping and the counts follow the cat
 """
 from __future__ import annotations
 
+import functools
 import re
 
 # (key, label, note) in precedence order: the first enabled catalogue that lists an object claims it.
@@ -36,6 +37,25 @@ ONLINE = ("lbn", "ldn", "vdb", "ced", "rcw")   # the ones the tickwhale database
 KEYS = tuple(k for k, _l, _n in CATALOGUES)
 LABELS = {k: l for k, l, _n in CATALOGUES}
 NOTES = {k: n for k, _l, n in CATALOGUES}
+# One colour per catalogue, used by the panel's cards: it is not the overlay's palette (that follows the type
+# of object), just a quick way to tell the catalogues apart.
+COLORS = {
+    "m": "#FFCF4A", "ngc": "#45D9E6", "ic": "#7FB5FF", "sh2": "#FF7BAE",
+    "lbn": "#B7A2FF", "ldn": "#8A78E8", "vdb": "#6FD3A8", "ced": "#F2A65A", "rcw": "#E8735A",
+}
+
+
+@functools.lru_cache(maxsize=1)
+def counts() -> dict:
+    """How many objects each bundled catalogue holds; the online ones are not counted locally."""
+    from . import catalogs
+    n = {}
+    for d in catalogs.openngc():
+        key = catalogue_of(d)
+        if key:
+            n[key] = n.get(key, 0) + 1
+    n["sh2"] = len(catalogs.sharpless())
+    return n
 PRECEDENCE = {k: i for i, k in enumerate(KEYS)}
 
 _NUM = re.compile(r"(\d+)")
