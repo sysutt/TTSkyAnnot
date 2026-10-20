@@ -1195,8 +1195,8 @@ def main():
         top = widget.mapTo(win, widget.rect().topLeft()).y()
         return top, top + widget.height()
 
-    last_dso = max(list(win.chk_groups.values()) + list(win.chk_extra.values()),
-                   key=lambda c: _span(c)[0])
+    # the catalogue cards live in a scroller; its bottom edge is the end of the annotation group
+    last_dso = win.catalogue_scroll
     gaps = [
         ("the target group starts below the queue", _span(win.lbl_target)[0] - _span(win.list)[1]),
         ("the star catalogues sit below the target group", _span(win.lbl_cats)[0] - _span(win.ed_coord)[1]),
@@ -1205,14 +1205,15 @@ def main():
         ("the output group follows the display group", _span(win.lbl_out)[0] - _span(win.cmb_bayer)[1]),
     ]
     for text, gap in gaps:
-        check(text, gap >= 6, "%d px" % gap)
+        check(text, gap >= 4, "%d px" % gap)
     check("the captions keep one rhythm", max(g for _t, g in gaps) - min(g for _t, g in gaps) <= 6,
           " / ".join(str(g) for _t, g in gaps))
     order = [_span(w)[0] for w in (win.lbl_target, win.lbl_cats, win.lbl_anno, win.lbl_shape, win.lbl_out)]
     check("the groups are in the order the work happens", order == sorted(order), str(order))
-    check("the shape row sits above the Bayer chooser",
-          _span(win.cmb_bayer)[0] - _span(win.cmb_shape)[1] >= 4,
-          "%d px" % (_span(win.cmb_bayer)[0] - _span(win.cmb_shape)[1]))
+    check("the shape and Bayer choosers share one row under the display caption",
+          abs(_span(win.cmb_bayer)[0] - _span(win.cmb_shape)[0]) <= 2
+          and _span(win.cmb_shape)[0] > _span(win.lbl_shape)[1],
+          "%d / %d" % (_span(win.cmb_shape)[0], _span(win.cmb_bayer)[0]))
     check("the output caption sits above the output switches, not above the catalogues",
           _span(win.lbl_out)[0] > _span(win.cmb_bayer)[1] and _span(win.lbl_out)[0] < _span(win.chk["write_txt"])[0],
           "%d / %d / %d" % (_span(win.cmb_bayer)[1], _span(win.lbl_out)[0], _span(win.chk["write_txt"])[0]))

@@ -23,7 +23,7 @@ from dataclasses import replace
 import numpy as np
 from PyQt5.QtCore import (QEvent, QPointF, QProcess, QPropertyAnimation, QRectF, QSize, QStringListModel, Qt,
                           QThread, QTimer, QUrl, pyqtProperty, pyqtSignal)
-from PyQt5.QtGui import (QBrush, QColor, QDesktopServices, QFont, QIcon, QImage, QKeySequence, QPainter,
+from PyQt5.QtGui import (QBrush, QColor, QDesktopServices, QFont, QFontMetrics, QIcon, QImage, QKeySequence, QPainter,
                          QPainterPath, QPalette, QPen, QPixmap, QPolygonF)
 from PyQt5.QtWidgets import (QAbstractButton, QAbstractItemView, QAction, QApplication, QCheckBox, QComboBox,
                              QCompleter,
@@ -195,7 +195,7 @@ def _restyle():
     QWidget{color:%(fg1)s}
     QLabel{background:transparent;color:%(fg2)s}
     QLabel#section{color:%(fg3)s;font-weight:600;font-size:11px;letter-spacing:1px;
-                   padding-top:10px;padding-bottom:2px}
+                   padding-top:8px;padding-bottom:1px}
     QLabel#note{color:%(fg5)s}
     QLabel#value{color:%(fg1)s}
     /* inputs: dark surface, hairline border, accent only on focus */
@@ -292,6 +292,90 @@ def _toggle(parent, text, checked, tooltip="", min_width=0):
     if min_width:
         c.setMinimumWidth(min_width)
     return c
+
+
+class CatalogueCard(QAbstractButton):
+    """A catalogue on the panel as a small card: an accent bar, its name, and how many objects it holds.
+
+    The bar carries the catalogue's colour while the catalogue is switched on and goes grey when it is off, so
+    the row also works without reading the legend. Cards sit in one horizontally scrolling row.
+    """
+
+    PAD = 10
+    HEIGHT = 46
+
+    def __init__(self, name, count, color, parent=None):
+        super().__init__(parent)
+        self.setText(name)                     # accessible name; the paint below draws it
+        self._count = count
+        self._color = QColor(color)
+        self.setCheckable(True)
+        self.setCursor(Qt.PointingHandCursor)
+        self.setFocusPolicy(Qt.NoFocus)
+        self.setFixedHeight(self.HEIGHT)
+        self.toggled.connect(self.update)
+
+    def sizeHint(self):
+        fm = QFontMetrics(QFont("Segoe UI", 9, QFont.DemiBold))
+        return QSize(max(fm.horizontalAdvance(self.text()), 56) + self.PAD * 2 + 8, self.HEIGHT)
+
+    def paintEvent(self, _ev):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing, True)
+        r = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
+        on = self.isChecked()
+        hover = self.underMouse()
+        p.setBrush(QColor(C["elev"] if hover else C["surface"]))
+        p.setPen(QPen(QColor(C["accent"] if on else C["border2"]), 1))
+        p.drawRoundedRect(r, 8, 8)
+        bar = QRectF(r.left() + 1.5, r.top() + 7, 3, r.height() - 14)
+        p.setPen(Qt.NoPen)
+        p.setBrush(QColor(self._color if on else C["border2"]))
+        p.drawRoundedRect(bar, 1.5, 1.5)
+        f1 = QFont("Segoe UI", 9, QFont.DemiBold)
+        p.setFont(f1)
+        p.setPen(QColor(C["fg1"] if on else C["fg3"]))
+        p.drawText(QRectF(r.left() + self.PAD + 5, r.top() + 5, r.width() - self.PAD - 9, 18),
+                   Qt.AlignLeft | Qt.AlignVCenter, self.text())
+        p.setFont(QFont("Segoe UI", 8))
+        p.setPen(QColor(C["fg5"] if not on else C["fg3"]))
+        label = ("%s 个" % format(self._count, ",")) if self._count else t("在线")
+        p.drawText(QRectF(r.left() + self.PAD + 5, r.top() + 22, r.width() - self.PAD - 9, 16),
+                   Qt.AlignLeft | Qt.AlignVCenter, label)
+
+
+class SectionScroll(QScrollArea):
+    """A column of sections whose preferred height is its content, so it shows fully at the default window
+    size, but which shrinks (and scrolls) when the window is small."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._pref = 300
+        self.setWidgetResizable(True)
+        self.setFrameShape(QFrame.NoFrame)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+
+    def set_content(self, content):
+        self.setWidget(content)
+        self.updateGeometry()
+
+    def sizeHint(self):
+        w = self.widget()
+        if w is not None:
+            self._pref = w.sizeHint().height() + 4      # the layout knows its height only once it is built
+        return QSize(super().sizeHint().width(), self._pref)
+
+    def minimumSizeHint(self):
+        return QSize(super().minimumSizeHint().width(), 200)
+
+
+class HScroll(QScrollArea):
+    """A one-row scroll area: the wheel moves it sideways, which is the only axis it has."""
+
+    def wheelEvent(self, ev):
+        bar = self.horizontalScrollBar()
+        bar.setValue(bar.value() - ev.angleDelta().y())
+        ev.accept()
 
 
 class Switch(QAbstractButton):
@@ -2211,7 +2295,17 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.cfg = cfg
         self.setWindowTitle("%s %s" % (t("TTSkyAnnot · 星图标注"), __version__))
-        self.resize(1400, 900)
+        # Fit the screen the window opens on: 1400x900 used to run under the taskbar on shorter displays.
+        screen = QApplication.primaryScreen()
+        avail = screen.availableGeometry() if screen is not None else None
+        width, height = 1400, 940
+        if avail is not None:
+            width = max(1000, min(width, avail.width() - 40))
+            height = max(620, min(height, avail.height() - 40))
+        self.resize(width, height)
+        if avail is not None:
+            self.move(avail.x() + max(0, (avail.width() - width) // 2),
+                      avail.y() + max(0, (avail.height() - height) // 2))
         self.img = None
         self.wcs = None
         self.current = None
@@ -2460,7 +2554,7 @@ class MainWindow(QMainWindow):
         self.list.currentRowChanged.connect(self._row_changed)
         self.list.setContextMenuPolicy(Qt.CustomContextMenu)
         self.list.customContextMenuRequested.connect(lambda pos: self._list_menu(pos, self.list))
-        self.list.setMinimumHeight(4 * _list_row_height(self.list) + 10)
+        self.list.setMinimumHeight(2 * _list_row_height(self.list) + 8)
         lay.addWidget(self.list, 5)                # the queue takes the panel's spare height
         lay.addSpacing(4)                          # air between the queue and the first caption
 
@@ -2468,7 +2562,17 @@ class MainWindow(QMainWindow):
         self.controls = QVBoxLayout()
         self.controls.setContentsMargins(0, 0, 0, 0)
         self.controls.setSpacing(6)
-        lay.addLayout(self.controls)
+        # The groups below can be taller than a small screen: they scroll inside the dock, while the queue,
+        # the actions and the log keep their places.
+        inner = QWidget()
+        inner.setAttribute(Qt.WA_TranslucentBackground)
+        inner.setLayout(self.controls)
+        ctl_scroll = SectionScroll()
+        ctl_scroll.set_content(inner)
+        ctl_scroll.setStyleSheet("QScrollArea{background:transparent;border:none}")
+        ctl_scroll.viewport().setAutoFillBackground(False)
+        self.controls_scroll = ctl_scroll
+        lay.addWidget(ctl_scroll)
 
         def section(text):
             """A group caption. QLabel#section brings its own top padding, so the rhythm is the caption's."""
@@ -2547,16 +2651,6 @@ class MainWindow(QMainWindow):
         self._cats_changed()                       # show the count from the start
 
         # ── 标注内容：画什么 ──────────────────────────────────────────────────────────────────
-        self.lbl_anno = section("标注内容")
-        legend = QLabel("&nbsp;&nbsp;".join(
-            "<span style='color:%s'>●</span> %s" % (style.CATEGORY_COLORS[k], t(name))
-            for k, name in (("galaxy", "星系"), ("nebula", "星云"), ("cluster", "星团"), ("dark", "暗星云"))))
-        legend.setTextFormat(Qt.RichText)
-        legend.setObjectName("note")
-        legend.setToolTip(t("颜色按天体类型：同一类型里的每个天体再取属于自己的深浅"))
-        self.controls.addWidget(legend)
-
-        self.chk_groups = {}
         saved = self.cfg.get("groups")              # None = never saved: everything starts on
         # the star names and the grid are not catalogues, so they are not part of the precedence list and are
         # switched separately. "grid" and "named" keep their historical config keys.
@@ -2567,28 +2661,58 @@ class MainWindow(QMainWindow):
 
         def is_on(key):
             return fresh or key in saved
-        role_col = QVBoxLayout()
-        role_col.setContentsMargins(0, 0, 0, 0)
-        role_col.setSpacing(5)
-        for i in range(0, len(GROUPS), 3):          # three per row: the labels are short
-            row = QHBoxLayout()
-            row.setSpacing(5)
-            for key, text in GROUPS[i:i + 3]:
-                c = pill(text, catalogue.NOTES[key], is_on(key), self._groups_changed)
-                self.chk_groups[key] = c
-                row.addWidget(c)                   # natural width: the pills hug their own text
-            row.addStretch(1)                      # and the row stays left-aligned
-            role_col.addLayout(row)
-        extras = QHBoxLayout()
-        extras.setSpacing(5)
+
+        anno_head = QHBoxLayout()
+        anno_head.setContentsMargins(0, 0, 0, 0)
+        anno_head.setSpacing(5)
+        self.lbl_anno = QLabel(t("标注内容"))
+        self.lbl_anno.setObjectName("section")
+        anno_head.addWidget(self.lbl_anno)
+        anno_head.addStretch(1)
         self.chk_extra = {}
         for key, text in (("named", "亮星名"), ("grid", "坐标网格")):
             c = pill(text, t("和星表无关，单独开关；默认开启"), is_on(key), self._groups_changed)
+            c.setStyleSheet(TOGGLE_QSS)
             self.chk_extra[key] = c
-            extras.addWidget(c)
-        extras.addStretch(1)
-        role_col.addLayout(extras)
-        self.controls.addLayout(role_col)
+            anno_head.addWidget(c)
+        self.controls.addLayout(anno_head)
+        legend = QLabel("&nbsp;&nbsp;".join(
+            "<span style='color:%s'>●</span> %s" % (style.CATEGORY_COLORS[k], t(name))
+            for k, name in (("galaxy", "星系"), ("nebula", "星云"), ("cluster", "星团"), ("dark", "暗星云"))))
+        legend.setTextFormat(Qt.RichText)
+        legend.setObjectName("note")
+        legend.setToolTip(t("颜色按天体类型：同一类型里的每个天体再取属于自己的深浅"))
+        self.controls.addWidget(legend)
+
+        self.chk_groups = {}
+        counts = catalogue.counts()
+        row_w = QWidget()
+        row_w.setAttribute(Qt.WA_TranslucentBackground)
+        row_h = QHBoxLayout(row_w)
+        row_h.setContentsMargins(0, 0, 0, 0)
+        row_h.setSpacing(6)
+        for key, text in GROUPS:
+            card = CatalogueCard(t(text), counts.get(key), catalogue.COLORS.get(key, C["accent"]), row_w)
+            card.setChecked(is_on(key))
+            card.setToolTip("%s\n%s %s" % (t(catalogue.NOTES[key]), t("星表里共有"),
+                                           format(counts[key], ",") if counts.get(key) else t("在线库")))
+            card.toggled.connect(self._groups_changed)
+            self.chk_groups[key] = card
+            row_h.addWidget(card)
+        row_h.addStretch(1)
+        scroller = HScroll()
+        scroller.setWidgetResizable(True)
+        scroller.setFrameShape(QFrame.NoFrame)
+        scroller.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroller.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        scroller.setWidget(row_w)
+        scroller.setFixedHeight(CatalogueCard.HEIGHT + 18)
+        scroller.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
+        scroller.setStyleSheet("QScrollArea{background:transparent;border:none}")
+        scroller.viewport().setAutoFillBackground(False)
+        self.catalogue_scroll = scroller
+        self.controls.addWidget(scroller)
+
 
         # ── 显示：怎么画 ─────────────────────────────────────────────────────────────────────
         self.lbl_shape = section("显示")
@@ -2603,21 +2727,19 @@ class MainWindow(QMainWindow):
         self.cmb_shape.setToolTip(t("轮廓线：有轮廓数据的星云按实际形状描边。圆圈：一律按星表尺寸画圆，长条形天体画成椭圆。"))
         self.cmb_shape.currentIndexChanged.connect(self._shape_changed)
         row.addWidget(self.cmb_shape, 1)
-        self.controls.addLayout(row)
-
+        row.addSpacing(6)
         # The colours of a one-shot colour sensor, for a frame whose header does not say which arrangement it
         # used. Only meaningful for a single-channel mosaic, so it stays disabled until one is on screen.
-        row = QHBoxLayout()
-        row.setContentsMargins(0, 0, 0, 0)
-        row.setSpacing(8)
-        self.lbl_bayer = QLabel(t("拜耳阵列"))
+        self.lbl_bayer = QLabel(t("拜耳"))
         row.addWidget(self.lbl_bayer)
         self.cmb_bayer = QComboBox()
-        self.cmb_bayer.addItem(t("自动（按文件头）"), "auto")
+        self.cmb_bayer.addItem(t("自动"), "auto")         # the tooltip says it follows the header
         for key in debayer.PATTERNS:
             self.cmb_bayer.addItem(t(debayer.PATTERN_LABELS[key]), key)
         self.cmb_bayer.setCurrentIndex(
             max(0, self.cmb_bayer.findData(self.cfg.get("bayer_pattern", "auto"))))
+        self.cmb_bayer.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
+        self.cmb_bayer.setMinimumContentsLength(7)   # the long item list must not widen the dock
         self.cmb_bayer.setToolTip(t("彩色相机的未解拜耳帧如果文件头没写拜耳排列，就在这里指定。\n"
                                     "只对单通道的彩色马赛克帧生效；已经解拜耳或本来就是单色的帧不受影响。"))
         self.cmb_bayer.currentIndexChanged.connect(self._bayer_changed)
@@ -2671,7 +2793,7 @@ class MainWindow(QMainWindow):
         self.logbox = QPlainTextEdit()
         self.logbox.setReadOnly(True)
         self.logbox.setMaximumBlockCount(4000)
-        self.logbox.setMinimumHeight(84)           # the sections above are tall; the log still gets a few lines
+        self.logbox.setMinimumHeight(40)           # the sections above are tall; the log still gets a few lines
         lay.addWidget(self.logbox, 3)
         self.btn_folder = QPushButton(t("打开输出文件夹"))
         self.btn_folder.clicked.connect(self.open_folder)
