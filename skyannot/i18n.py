@@ -160,6 +160,8 @@ _EN = {
     "未解析": "not solved",
     "已解析": "solved",
     "已拉伸": "already stretched",
+    "拖入图片，或点这里打开": "Drop an image here, or click to open",
+    "支持 FITS / XISF / TIFF / JPG / PNG": "FITS / XISF / TIFF / JPG / PNG supported",
     "ttsky_…（点「领取密钥」免费获取）": "ttsky_… (click Get a key, it is free)",
     "领取密钥…": "Get a key…",
     "在浏览器中打开领取页面（免费）": "Opens the key page in your browser (free)",

@@ -47,13 +47,26 @@ COLORS = {
 
 @functools.lru_cache(maxsize=1)
 def counts() -> dict:
-    """How many objects each bundled catalogue holds; the online ones are not counted locally."""
+    """How many records each bundled catalogue holds; the online ones are not counted locally.
+
+    These are the catalogue sizes, not what the precedence rule would assign: NGC 224 is an NGC record even
+    though the picture labels it M31. The Messier catalogue is the familiar 110; OpenNGC leaves M102 (the
+    disputed NGC 5866) without a Messier number, so it is added back here.
+    """
     from . import catalogs
-    n = {}
+    n = {"ngc": 0, "ic": 0}
     for d in catalogs.openngc():
-        key = catalogue_of(d)
-        if key:
-            n[key] = n.get(key, 0) + 1
+        up = str(d.name).upper().replace(" ", "")
+        if up.startswith("NGC"):
+            n["ngc"] += 1
+        elif up.startswith("IC"):
+            n["ic"] += 1
+    numbers = set()
+    for d in catalogs.messier():
+        num = re.sub(r"\D", "", d.messier or "")
+        if num:
+            numbers.add(int(num))
+    n["m"] = len(numbers) + (0 if 102 in numbers else 1)
     n["sh2"] = len(catalogs.sharpless())
     return n
 PRECEDENCE = {k: i for i, k in enumerate(KEYS)}
