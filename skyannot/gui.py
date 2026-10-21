@@ -2833,13 +2833,16 @@ class MainWindow(QMainWindow):
         self.controls.setSpacing(6)
         # The groups below can be taller than a small screen: they scroll inside the dock, while the queue,
         # the actions and the log keep their places.
+        # Opaque, not translucent: a translucent column leaves the old pixels behind while the dock is being
+        # dragged, which reads as a smear across the panel.
         inner = QWidget()
-        inner.setAttribute(Qt.WA_TranslucentBackground)
+        inner.setObjectName("sectionInner")
+        inner.setStyleSheet("QWidget#sectionInner{background:%s}" % C["surface"])
         inner.setLayout(self.controls)
         ctl_scroll = SectionScroll()
         ctl_scroll.set_content(inner)
-        ctl_scroll.setStyleSheet("QScrollArea{background:transparent;border:none}")
-        ctl_scroll.viewport().setAutoFillBackground(False)
+        ctl_scroll.setStyleSheet("QScrollArea{background:%s;border:none}" % C["surface"])
+        ctl_scroll.viewport().setAutoFillBackground(True)
         self.controls_scroll = ctl_scroll
         lay.addWidget(ctl_scroll)
 
@@ -2956,7 +2959,8 @@ class MainWindow(QMainWindow):
         self.chk_groups = {}
         counts = catalogue.counts()
         row_w = QWidget()
-        row_w.setAttribute(Qt.WA_TranslucentBackground)
+        row_w.setObjectName("cardRow")
+        row_w.setStyleSheet("QWidget#cardRow{background:%s}" % C["surface"])
         row_h = QHBoxLayout(row_w)
         row_h.setContentsMargins(0, 0, 0, 0)
         row_h.setSpacing(6)
@@ -2979,7 +2983,7 @@ class MainWindow(QMainWindow):
         scroller.setWidget(row_w)
         scroller.setFixedHeight(CatalogueCard.HEIGHT + 18)
         scroller.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
-        scroller.viewport().setAutoFillBackground(False)
+        scroller.viewport().setAutoFillBackground(True)
         self.catalogue_scroll = scroller
         self.controls.addWidget(scroller)
 
