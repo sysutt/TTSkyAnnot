@@ -2332,19 +2332,31 @@ class _UpdateCheck(QThread):
 
 
 class _UpdateDownload(QThread):
-    """Downloads and unpacks a package off the GUI thread, reporting bytes and the result."""
+    """Downloads the new build off the GUI thread, reporting bytes and the result.
+
+    An installed copy downloads the installer and hands over to it; a portable one downloads the zip and
+    unpacks it for the swap batch. `done` carries the unpacked folder in the first case, the setup's path in
+    the second.
+    """
 
     progress = pyqtSignal(int, int)                # bytes done, bytes total (0 when unknown)
-    done = pyqtSignal(str, str)                    # unpacked folder or "", error text
+    done = pyqtSignal(str, str)                    # folder / installer path, or "", error text
 
-    def __init__(self, base, feed, parent=None):
+    def __init__(self, base, feed, mode="zip", parent=None):
         super().__init__(parent)
-        self.base, self.feed = base, feed
+        self.base, self.feed, self.mode = base, feed, mode
         self.stop = False
 
     def run(self):
         try:
             folder = tempfile.mkdtemp(prefix="ttskyannot-pkg-")
+            if self.mode == "setup":
+                path = updater.download_setup(
+                    self.base, self.feed, folder,
+                    progress=lambda done, total: self.progress.emit(done, total),
+                    should_stop=lambda: self.stop)
+                self.done.emit(path, "")
+                return
             zip_path = updater.download(
                 self.base, self.feed, folder,
                 progress=lambda done, total: self.progress.emit(done, total),
@@ -2362,13 +2374,21 @@ class UpdateDialog(FramedDialog):
         self.feed, self.base = feed, base
         self.skipped = False
         self._worker = None
+        # An installed copy is upgraded by the installer (Start Menu entry, uninstall record and shortcuts all
+        # stay right); a portable folder is swapped by the batch. Ask the program folder, not a setting.
+        self.mode = "setup" if (updater.is_installed() and updater.has_setup(feed)) else "zip"
         self.resize(580, 400)
         head = QLabel("%s %s  →  %s" % (t("当前版本"), __version__, feed.get("version", "")))
         head.setObjectName("value")
         self.body.addWidget(head)
-        size = int(feed.get("size") or 0)
+        size = int((feed.get("setup_size") if self.mode == "setup" else feed.get("size")) or 0)
         if size:
             self.body.addWidget(QLabel("%s: %.1f MB" % (t("下载大小"), size / 1048576.0)))
+        if self.mode == "setup":
+            hint = QLabel(t("下载完成后程序会关闭，随后打开安装程序，按向导完成更新。"))
+            hint.setObjectName("note")
+            hint.setWordWrap(True)
+            self.body.addWidget(hint)
         notes = QPlainTextEdit()
         notes.setPlainText(str(feed.get("notes") or "").strip())
         notes.setReadOnly(True)
@@ -2418,7 +2438,7 @@ class UpdateDialog(FramedDialog):
         self.speed.setVisible(True)
         self.bar.setRange(0, 0)
         config._diag("update: download start %r" % (self.feed.get("version"),))
-        self._worker = _UpdateDownload(self.base, self.feed, self)
+        self._worker = _UpdateDownload(self.base, self.feed, self.mode, self)
         self._worker.progress.connect(self._progress)
         self._worker.done.connect(self._ready)
         self._worker.start()
@@ -2441,12 +2461,19 @@ class UpdateDialog(FramedDialog):
             QMessageBox.warning(self, "TTSkyAnnot", "%s\n\n%s" % (t("更新失败"), error))
             return
         try:
-            updater.install_and_restart(folder, updater.app_dir(), os.getpid())
+            if self.mode == "setup":
+                updater.launch_setup(folder, os.getpid())
+            else:
+                updater.install_and_restart(folder, updater.app_dir(), os.getpid())
         except Exception as e:
             QMessageBox.warning(self, "TTSkyAnnot", "%s\n\n%s" % (t("无法开始更新"), e))
             return
         self.accept()
-        QApplication.quit()
+        if self.mode == "setup":
+            # give the waiting script a moment to see this process go away, then close the window
+            QTimer.singleShot(250, QApplication.quit)
+        else:
+            QApplication.quit()
 
 
 # ───────────────────────────── main window ─────────────────────────────

@@ -28,6 +28,7 @@ from . import __version__
 
 EXE_NAME = "TTSkyAnnot.exe"
 FEED_NAME = "version.json"
+SETUP_NAME = "TTSkyAnnot-Setup.exe"
 LOCAL = ("", "local")
 
 
@@ -206,6 +207,123 @@ def app_dir() -> str:
     if getattr(sys, "frozen", False):
         return os.path.dirname(os.path.abspath(sys.executable))
     return ""
+
+
+def is_installed(target: str = "") -> bool:
+    """An Inno Setup install puts unins000.exe beside the program; the portable zip has none.
+
+    The two need different updates: the installer knows how to replace itself in place (and the Start Menu
+    entry, the uninstall record and the file associations stay consistent), while the portable build is just
+    a folder and is swapped by the batch below.
+    """
+    target = target if target is not None else app_dir()
+    return bool(target) and os.path.isfile(os.path.join(target, "unins000.exe"))
+
+
+def setup_feed(feed: dict) -> dict:
+    """The installer half of a feed, in the same shape download() expects."""
+    return {"url": str(feed.get("setup") or "").strip(),
+            "sha256": str(feed.get("setup_sha256") or "").strip(),
+            "size": int(feed.get("setup_size") or 0)}
+
+
+def has_setup(feed: dict) -> bool:
+    return bool(str((feed or {}).get("setup") or "").strip())
+
+
+def download_setup(base: str, feed: dict, folder: str, progress=None, should_stop=None,
+                   timeout: float = 60.0) -> str:
+    """Fetch the installer (not the portable zip) and check its hash."""
+    sub = setup_feed(feed)
+    if not sub["url"]:
+        raise UpdateError("the update feed has no installer")
+    return download(base, sub, folder, progress=progress, should_stop=should_stop, timeout=timeout)
+
+
+def launch_setup(setup_path: str, pid: int, exe: str = EXE_NAME) -> str:
+    """Run the downloaded installer once this process is gone, the way the swap batch waits.
+
+    The installer is shown for real (not silent): it is the user's own upgrade, and the wizard is where the
+    choice of "for me / for everyone" lives.
+    """
+    setup_path = os.path.abspath(setup_path)
+    raw = os.path.join(os.path.dirname(setup_path), "run-setup.cmd")
+    probe = os.path.join(os.path.dirname(setup_path), "setup-probe.txt")
+    body = r'''@echo off
+setlocal enableextensions
+rem A process cannot rename the folder it is working in, and the program's own working directory may well be
+rem its install folder (Explorer launches it that way). Step outside before touching anything.
+cd /d "%SystemRoot%" 2>nul
+echo [%DATE% %TIME%] waiting for pid {pid} > "{log}"
+:wait
+tasklist /FI "PID eq {pid}" /NH > "{probe}" 2>nul
+find /I "{exe}" "{probe}" >nul 2>&1
+if not errorlevel 1 (
+  ping -n 2 127.0.0.1 >nul
+  goto wait
+)
+ping -n 3 127.0.0.1 >nul
+echo [%DATE% %TIME%] swapping in {new} >> "{log}"
+set /a tries=0
+:tryswap
+if exist "{old}" rmdir /s /q "{old}" >> "{log}" 2>&1
+move "{target}" "{old}" >> "{log}" 2>&1
+if not exist "{target}" goto moved
+set /a tries+=1
+if %tries% lss 30 goto waitmove
+echo [%DATE% %TIME%] could not move the old install aside; starting it again >> "{log}"
+start "" "{target}\{exe}"
+goto done
+:waitmove
+ping -n 2 127.0.0.1 >nul
+goto tryswap
+:moved
+set /a tries=0
+:trynew
+move "{new}" "{target}" >> "{log}" 2>&1
+if exist "{target}\{exe}" goto swapped
+set /a tries+=1
+if %tries% lss 15 goto waitnew
+rem Moving a fresh folder can be refused while a virus scanner reads the new executable: copy instead.
+echo [%DATE% %TIME%] move failed, copying the package instead >> "{log}"
+mkdir "{target}" 2>nul
+robocopy "{new}" "{target}" /E /R:3 /W:1 /NFL /NDL /NJH /NJS >> "{log}" 2>&1
+if exist "{target}\{exe}" goto swapped
+goto restore
+:waitnew
+ping -n 2 127.0.0.1 >nul
+goto trynew
+:swapped
+if exist "{old}\config.json" copy /y "{old}\config.json" "{target}\config.json" >> "{log}" 2>&1
+echo [%DATE% %TIME%] starting >> "{log}"
+start "" "{target}\{exe}"
+goto done
+:restore
+echo [%DATE% %TIME%] putting the old install back >> "{log}"
+if exist "{old}" rmdir /s /q "{target}" >> "{log}" 2>&1
+if exist "{old}" move "{old}" "{target}" >> "{log}" 2>&1
+rem Whatever happened, the program must come back: the user is looking at nothing otherwise.
+start "" "{target}\{exe}"
+:done
+del "{probe}" >nul 2>&1
+del "%~f0"
+'''.format(pid=pid, exe=exe, setup=setup_path, probe=probe)
+    with open(raw, "w", encoding="utf-8", newline="\r\n") as f:
+        f.write(body)
+    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    devnull = subprocess.DEVNULL
+    try:
+        subprocess.Popen(["cmd", "/c", raw], close_fds=True, creationflags=flags,
+                         cwd=os.path.dirname(setup_path),
+                         stdin=devnull, stdout=devnull, stderr=devnull)
+    except OSError as e:
+        raise UpdateError("could not start the installer: %s" % e)
+    try:
+        from . import config
+        config._diag("update: launched installer %s" % setup_path)
+    except Exception:
+        pass
+    return raw
 
 
 def cleanup_old(target: str) -> None:
