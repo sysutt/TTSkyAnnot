@@ -2970,7 +2970,7 @@ class MainWindow(QMainWindow):
         row_w.setObjectName("cardRow")
         row_w.setStyleSheet("QWidget#cardRow{background:%s}" % C["surface"])
         row_h = QHBoxLayout(row_w)
-        row_h.setContentsMargins(0, 0, 0, 0)
+        row_h.setContentsMargins(2, 3, 2, 5)        # the cards keep a little air off the row's edges
         row_h.setSpacing(6)
         for key, text in GROUPS:
             card = CatalogueCard(t(text), counts.get(key), catalogue.COLORS.get(key, C["accent"]), row_w)
@@ -2989,9 +2989,11 @@ class MainWindow(QMainWindow):
         scroller.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         scroller.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         scroller.setWidget(row_w)
-        scroller.setFixedHeight(CatalogueCard.HEIGHT + 18)
+        scroller.setFixedHeight(CatalogueCard.HEIGHT + 20)
         scroller.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
-        scroller.viewport().setAutoFillBackground(True)
+        # The viewport names its colour instead of inheriting one from the palette: a scroll area's Base can
+        # come out black on some Windows themes, which turned the row into a dark slab behind the cards.
+        scroller.viewport().setStyleSheet("background:%s;" % C["surface"])
         self.catalogue_scroll = scroller
         self.controls.addWidget(scroller)
 
