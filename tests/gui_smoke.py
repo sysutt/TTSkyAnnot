@@ -2351,6 +2351,22 @@ def main():
         sub = updater.setup_feed(feed)
         check("the installer half is a normal feed",
               sub["url"].endswith(".exe") and sub["sha256"] == "abc" and sub["size"] == 123, str(sub))
+
+        # the two scripts the updater writes: the swap batch, and the "wait for us, then run the wizard" one
+        work = tempfile.mkdtemp(prefix="tts-scripts-")
+        try:
+            swap = open(updater.install_script(work, os.path.join(work, "target"), 4242), encoding="utf-8").read()
+            check("the swap batch waits for this process and can retry a refused move",
+                  "PID eq 4242" in swap and "robocopy" in swap and "trynew" in swap, swap[:40])
+            check("and every way out of it starts the program again",
+                  "could not move the old install aside" in swap and "must come back" in swap, "")
+            fake = os.path.join(work, "setup.exe")
+            open(fake, "wb").close()
+            launch = open(updater.launch_setup(fake, 4242), encoding="utf-8").read()
+            check("the installer script waits too, then starts the wizard",
+                  "PID eq 4242" in launch and "start" in launch and "tryswap" not in launch, launch[:40])
+        finally:
+            shutil.rmtree(work, ignore_errors=True)
     finally:
         shutil.rmtree(inst, ignore_errors=True)
 
