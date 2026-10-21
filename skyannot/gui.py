@@ -270,7 +270,8 @@ def _restyle():
     QScrollBar::handle:vertical:hover{background:%(fg3)s}
     QScrollBar:horizontal{background:transparent;height:9px;margin:0}
     QScrollBar::handle:horizontal{background:%(stripe)s;border-radius:4px;min-width:28px}
-    QScrollBar::handle:horizontal:hover{background:%(fg3)s}
+    QScrollBar::handle:horizontal:hover{background:%(fg1)s}
+    QScrollBar::handle:horizontal:pressed{background:%(fg1)s}
     QScrollBar::add-line,QScrollBar::sub-line{height:0;width:0}
     QScrollBar::add-page,QScrollBar::sub-page{background:transparent}
     QStatusBar{color:%(fg3)s}
@@ -420,17 +421,24 @@ class HScroll(QScrollArea):
     """A one-row scroll area: the wheel moves it sideways, a press on a card drags the row, and the bar is a
     thin overlay rather than a desktop-sized control."""
 
-    QSS = ("QScrollArea{background:transparent;border:none}"
-           "QScrollBar:horizontal{height:6px;background:transparent;margin:0}"
-           "QScrollBar::handle:horizontal{background:#3a4750;border-radius:3px;min-width:28px}"
-           "QScrollBar::handle:horizontal:hover{background:#55656f}"
-           "QScrollBar::handle:horizontal:pressed{background:#6b7d88}"
-           "QScrollBar::add-line,QScrollBar::sub-line{width:0;height:0}"
-           "QScrollBar::add-page,QScrollBar::sub-page{background:transparent}")
+    def _qss(self):
+        """A 6-pixel bar that stays quiet until the pointer is on it, then goes near-white.
+
+        The hover colour must be brighter than the resting one: an earlier version dimmed it, and the bar
+        looked like it vanished into the panel background while being dragged.
+        """
+        return ("QScrollArea{background:transparent;border:none}"
+                "QScrollBar:horizontal{height:6px;background:transparent;margin:0}"
+                "QScrollBar::handle:horizontal{background:%s;border-radius:3px;min-width:28px}"
+                "QScrollBar::handle:horizontal:hover{background:%s}"
+                "QScrollBar::handle:horizontal:pressed{background:%s}"
+                "QScrollBar::add-line,QScrollBar::sub-line{width:0;height:0}"
+                "QScrollBar::add-page,QScrollBar::sub-page{background:transparent}"
+                % (C["fg5"], C["fg1"], C["fg1"]))
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setStyleSheet(self.QSS)
+        self.setStyleSheet(self._qss())
         self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self._press = None
         self._dragging = False
@@ -3567,6 +3575,8 @@ class MainWindow(QMainWindow):
                     break
         self.list.setStyleSheet(_list_qss(self.list))
         self.file_list.setStyleSheet(_list_qss(self.file_list))
+        for scroller in self.findChildren(HScroll):
+            scroller.setStyleSheet(scroller._qss())
         for dlg in self.findChildren(FramedDialog):        # an open dialog carries the panel sheet plus its card
             dlg.setStyleSheet(dlg._card_sheet())
         self.view.set_theme(C)
