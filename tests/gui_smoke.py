@@ -23,11 +23,12 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
 from PIL import Image                                   # noqa: E402
-from PyQt5.QtCore import QPoint, Qt                     # noqa: E402
+from PyQt5.QtCore import QEvent, QPoint, QPointF, Qt     # noqa: E402
+from PyQt5.QtGui import QMouseEvent                      # noqa: E402
 from PyQt5.QtTest import QTest                          # noqa: E402
 from PyQt5.QtWidgets import QApplication, QFileDialog   # noqa: E402
 
-from skyannot import config, gui, run                    # noqa: E402
+from skyannot import catalogue, config, gui, run          # noqa: E402
 
 TMP = os.path.join(ROOT, ".skyannot_test")
 failures = []
@@ -201,12 +202,14 @@ def main():
     check("dock is closable and has a toggle action",
           win.dock_files.features() & win.dock_files.DockWidgetClosable != 0
           and win._files_action.isCheckable())
+    # the list slides in when a picture is open and out again when the toolbar switch is pressed
+    check("the folder list is in when there is something to list", win.dock_files.isVisible())
     win._files_action.trigger()
-    QTest.qWait(50)
+    QTest.qWait(320)                              # the drawer animates for 170 ms
     hidden = win.dock_files.isHidden()
     win._files_action.trigger()
-    QTest.qWait(50)
-    check("dock toggle hides then shows the list", hidden and not win.dock_files.isHidden())
+    QTest.qWait(320)
+    check("dock toggle slides the list out then back", hidden and not win.dock_files.isHidden())
 
     # 3 ── the bottom bar is the only place with previous / next, and stepping wraps around at the ends
     check("the picture has no floating side arrows", not hasattr(win.view, "_nav"))
@@ -1217,6 +1220,29 @@ def main():
     check("the output caption sits above the output switches, not above the catalogues",
           _span(win.lbl_out)[0] > _span(win.cmb_bayer)[1] and _span(win.lbl_out)[0] < _span(win.chk["write_txt"])[0],
           "%d / %d / %d" % (_span(win.cmb_bayer)[1], _span(win.lbl_out)[0], _span(win.chk["write_txt"])[0]))
+
+    # 4u ── the catalogue cards: catalogue sizes, and a press on a card drags the row instead of toggling it
+    cs = catalogue.counts()
+    check("the Messier card counts the whole catalogue (M102 has no Messier number in OpenNGC)",
+          cs.get("m") == 110, str(cs.get("m")))
+    check("the other cards count their catalogue",
+          cs.get("ngc", 0) > 7000 and cs.get("ic", 0) > 4000 and cs.get("sh2") == 313, str(cs))
+
+    bar = win.catalogue_scroll.horizontalScrollBar()
+    card = win.chk_groups["ngc"]
+    before_on, before_v = card.isChecked(), bar.value()
+
+    def send_mouse(kind, x, buttons, button):
+        gp = card.mapToGlobal(QPoint(x, 20))
+        QApplication.sendEvent(card, QMouseEvent(kind, QPointF(x, 20), gp, button, buttons, Qt.NoModifier))
+
+    send_mouse(QEvent.MouseButtonPress, 150, Qt.LeftButton, Qt.LeftButton)
+    send_mouse(QEvent.MouseMove, 70, Qt.LeftButton, Qt.NoButton)
+    send_mouse(QEvent.MouseButtonRelease, 70, Qt.NoButton, Qt.LeftButton)
+    check("dragging a card scrolls the row",
+          bar.value() > before_v, "%d -> %d" % (before_v, bar.value()))
+    check("and does not toggle the card it was dragged by",
+          card.isChecked() == before_on, "%s -> %s" % (before_on, card.isChecked()))
 
     # 4t ── the save dialog's own styling
     dlg = gui.SaveDialog(paths[0], [paths[0] + ".objects.txt"])

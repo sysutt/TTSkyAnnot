@@ -21,7 +21,8 @@ import traceback
 from dataclasses import replace
 
 import numpy as np
-from PyQt5.QtCore import (QEvent, QPointF, QProcess, QPropertyAnimation, QRectF, QSize, QStringListModel, Qt,
+from PyQt5.QtCore import (QEasingCurve, QEvent, QPointF, QProcess, QPropertyAnimation, QRectF, QSize,
+                          QStringListModel, Qt,
                           QThread, QTimer, QUrl, pyqtProperty, pyqtSignal)
 from PyQt5.QtGui import (QBrush, QColor, QDesktopServices, QFont, QFontMetrics, QIcon, QImage, QKeySequence, QPainter,
                          QPainterPath, QPalette, QPen, QPixmap, QPolygonF)
@@ -30,7 +31,7 @@ from PyQt5.QtWidgets import (QAbstractButton, QAbstractItemView, QAction, QAppli
                              QDialog,
                              QDialogButtonBox, QDockWidget, QDoubleSpinBox, QFileDialog, QFormLayout, QFrame,
                              QGraphicsEllipseItem, QGraphicsPathItem, QGraphicsPixmapItem, QGraphicsRectItem,
-                             QGraphicsScene, QGraphicsSimpleTextItem, QGraphicsView, QGridLayout, QHBoxLayout,
+                             QGraphicsItem, QGraphicsScene, QGraphicsSimpleTextItem, QGraphicsView, QGridLayout, QHBoxLayout,
                              QHeaderView, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QMenu,
                              QMessageBox, QPlainTextEdit, QProgressBar, QProgressDialog, QProxyStyle, QPushButton,
                              QScrollArea, QSizeGrip,
@@ -75,6 +76,25 @@ THEMES = {
         "accent_press": "#4CAF50",
         "accent_tint": "rgba(104,224,152,0.12)",
         "accent_tint2": "rgba(104,224,152,0.22)",
+        # Solid state colours for the stylesheet. Alpha fills repaint over themselves on hover (the widget does
+        # not clear its background), so a repeatedly hovered pill keeps getting darker; these are the blends
+        # worked out once, in hex.
+        "hoverbg": "#2b353c",
+        "pressbg": "#333f47",
+        "selbg": "#263a31",
+        "selbg2": "#2c4438",
+        "field": "qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 #1f272c, stop:1 #2a343b)",
+        "fieldfocus": "#2f3a43",
+        "cardbg": "#232a2f",
+        "cardhover": "#2b353c",
+        "cardon": "#263139",
+        "cardline": "#333f47",
+        "cardlineon": "#3f505a",
+        "cardbaroff": "#46545d",
+        "cardfg_on": "#eef3f6",
+        "cardfg_off": "#9aa6ad",
+        "cardcount_on": "#b7c3ca",
+        "cardcount_off": "#6c7c88",
         "on_accent": "#06210f",                   # text on an accent fill
         "warn": "#F1A66A",
         "danger": "#ff6b6b",
@@ -103,6 +123,22 @@ THEMES = {
         "accent_press": "#1B6438",
         "accent_tint": "rgba(36,128,73,0.12)",
         "accent_tint2": "rgba(36,128,73,0.18)",
+        "hoverbg": "#EDF1F5",
+        "pressbg": "#E2E8ED",
+        "selbg": "#D8E8DE",
+        "selbg2": "#CDE3D6",
+        "field": "qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 #FBFCFD, stop:1 #EEF2F6)",
+        "fieldfocus": "#FFFFFF",
+        "cardbg": "#F5F7F9",
+        "cardhover": "#EDF1F5",
+        "cardon": "#E8F3EC",
+        "cardline": "#DFE5EA",
+        "cardlineon": "#C6D8CC",
+        "cardbaroff": "#C2CBD4",
+        "cardfg_on": "#161B22",
+        "cardfg_off": "#6E7885",
+        "cardcount_on": "#3E4A56",
+        "cardcount_off": "#8A949E",
         "on_accent": "#ffffff",                   # white on the deeper green: 4.9:1
         "warn": "#B4682A",
         "danger": "#C94F4F",
@@ -167,10 +203,10 @@ def _restyle():
     #imageBar{background:%(surface)s;border:1px solid %(border2)s;border-radius:8px}
     #imageBar QToolButton{color:%(fg2)s;background:transparent;border:none;border-radius:4px;
                          font-size:15px;padding:0}
-    #imageBar QToolButton:hover:enabled{background:%(elev)s;color:%(fg1)s}
-    #imageBar QToolButton:pressed:enabled{background:%(press)s}
+    #imageBar QToolButton:hover:enabled{background:%(hoverbg)s;color:%(fg1)s}
+    #imageBar QToolButton:pressed:enabled{background:%(pressbg)s}
     #imageBar QToolButton:disabled{color:%(disabled)s}
-    #imageBar QToolButton:checked{background:%(accent_tint2)s;color:%(accent)s}
+    #imageBar QToolButton:checked{background:%(selbg)s;color:%(accent)s}
     QFrame#barSep{color:%(border2)s}
     """, C)
     # Toggles are chips rather than boxes with ticks: the state is the fill, which reads at a glance and keeps
@@ -180,9 +216,9 @@ def _restyle():
     QCheckBox{background:%(surface)s;border:1px solid %(border2)s;border-radius:6px;color:%(fg2)s;
               padding:4px 10px;spacing:0px}
     QCheckBox:hover{border-color:%(fg3)s;color:%(fg1)s}
-    QCheckBox:checked{background:%(accent_tint2)s;border:1px solid %(accent)s;color:%(accent)s;
+    QCheckBox:checked{background:%(selbg)s;border:1px solid %(accent)s;color:%(accent)s;
                       font-weight:600}
-    QCheckBox:checked:hover{background:%(accent_tint)s}
+    QCheckBox:checked:hover{background:%(selbg2)s}
     QCheckBox:disabled{color:%(disabled)s;border-color:%(border)s}
     /* no indicator at all: the fill is the state. Zero size alone still let the panel's indicator rule paint
        a stray dot before every label, so the subcontrol is neutralised completely here. */
@@ -199,10 +235,11 @@ def _restyle():
     QLabel#note{color:%(fg5)s}
     QLabel#value{color:%(fg1)s}
     /* inputs: dark surface, hairline border, accent only on focus */
-    QComboBox,QLineEdit,QSpinBox,QDoubleSpinBox{background:%(surface2)s;border:0.5px solid %(border2)s;
-        border-radius:4px;padding:4px 8px;color:%(fg1)s;selection-background-color:%(accent)s;
+    /* inputs: no outline at all, a soft gradient fill that reads as a shallow inset */
+    QComboBox,QLineEdit,QSpinBox,QDoubleSpinBox{background:%(field)s;border:none;
+        border-radius:6px;padding:5px 9px;color:%(fg1)s;selection-background-color:%(accent)s;
         selection-color:%(on_accent)s}
-    QLineEdit:focus,QComboBox:focus{border:1px solid %(accent)s}
+    QLineEdit:focus,QComboBox:focus{background:%(fieldfocus)s}
     QLineEdit[bad="true"]{border:1px solid %(danger)s}
     QComboBox::drop-down{border:none;width:16px}
     /* the spin buttons: plain 16-px columns; the arrows themselves are drawn by _ArrowStyle, because a
@@ -210,7 +247,7 @@ def _restyle():
     QSpinBox::up-button,QDoubleSpinBox::up-button{width:16px;border:none;background:transparent}
     QSpinBox::down-button,QDoubleSpinBox::down-button{width:16px;border:none;background:transparent}
     QSpinBox::up-button:hover,QDoubleSpinBox::up-button:hover,
-    QSpinBox::down-button:hover,QDoubleSpinBox::down-button:hover{background:%(elev)s}
+    QSpinBox::down-button:hover,QDoubleSpinBox::down-button:hover{background:%(hoverbg)s}
     QComboBox QAbstractItemView{background:%(surface)s;border:0.5px solid %(border2)s;color:%(fg1)s;
         selection-background-color:%(accent_tint2)s;selection-color:%(accent)s;outline:none}
     /* panels and their titles */
@@ -221,7 +258,7 @@ def _restyle():
     QPushButton{background:%(surface2)s;border:0.5px solid %(border)s;border-radius:4px;padding:6px 10px;
         color:%(fg1)s}
     QPushButton:hover{background:%(stripe)s}
-    QPushButton:pressed{background:%(press)s}
+    QPushButton:pressed{background:%(pressbg)s}
     QPushButton:disabled{background:%(surface)s;color:%(disabled)s;border-color:%(border)s}
     QPlainTextEdit{background:%(canvas)s;border:0.5px solid %(border)s;border-radius:4px;color:%(fg3)s;
         font-family:'JetBrains Mono','Consolas',monospace;font-size:11px}
@@ -241,8 +278,8 @@ def _restyle():
     QToolBar{background:%(bg)s;border:none;spacing:2px;padding:3px}
     QToolBar QToolButton{background:transparent;border:0.5px solid transparent;border-radius:4px;
         padding:4px 8px;color:%(fg2)s}
-    QToolBar QToolButton:hover{background:%(elev)s;color:%(fg1)s}
-    QToolBar QToolButton:checked{background:%(accent_tint2)s;border-color:%(accent)s;color:%(accent)s}
+    QToolBar QToolButton:hover{background:%(hoverbg)s;color:%(fg1)s}
+    QToolBar QToolButton:checked{background:%(selbg)s;border-color:%(accent)s;color:%(accent)s}
     QToolBar::separator{background:%(border)s;width:1px;margin:4px 5px}
     /* 全选 / 清空: a quiet accent link, coloured by the sheet so a live theme change reaches it */
     QToolButton#link{color:%(accent)s;border:none;background:transparent;padding:0 3px}
@@ -250,7 +287,7 @@ def _restyle():
     QToolTip{background:%(surface)s;color:%(fg1)s;border:0.5px solid %(border2)s;padding:4px 6px}
     QMenu{background:%(surface)s;border:0.5px solid %(border2)s;color:%(fg1)s;padding:4px}
     QMenu::item{padding:5px 18px 5px 12px;border-radius:3px}
-    QMenu::item:selected{background:%(accent_tint2)s;color:%(accent)s}
+    QMenu::item:selected{background:%(selbg)s;color:%(accent)s}
     QMenu::separator{height:1px;background:%(border)s;margin:4px 6px}
     QCheckBox{color:%(fg2)s;spacing:6px}
     /* A real check box, as opposed to the pill toggles: Qt draws the indicator itself, and left unstyled it
@@ -297,11 +334,13 @@ def _toggle(parent, text, checked, tooltip="", min_width=0):
 class CatalogueCard(QAbstractButton):
     """A catalogue on the panel as a small card: an accent bar, its name, and how many objects it holds.
 
-    The bar carries the catalogue's colour while the catalogue is switched on and goes grey when it is off, so
-    the row also works without reading the legend. Cards sit in one horizontally scrolling row.
+    The bar carries the catalogue's colour while the catalogue is switched on and goes grey when it is off;
+    the card itself stays neutral (a quiet border, a slightly lighter hover) so a row of them reads calmly.
+    Colours come from the theme in solid values: the palette's rgba() tints are strings QColor will not parse,
+    and an invalid QColor paints black.
     """
 
-    PAD = 10
+    PAD = 12
     HEIGHT = 46
 
     def __init__(self, name, count, color, parent=None):
@@ -310,14 +349,22 @@ class CatalogueCard(QAbstractButton):
         self._count = count
         self._color = QColor(color)
         self.setCheckable(True)
-        self.setCursor(Qt.PointingHandCursor)
+        self.setCursor(Qt.OpenHandCursor)      # the row is dragged sideways with the mouse
         self.setFocusPolicy(Qt.NoFocus)
         self.setFixedHeight(self.HEIGHT)
         self.toggled.connect(self.update)
 
+    def enterEvent(self, ev):
+        self.update()
+        super().enterEvent(ev)
+
+    def leaveEvent(self, ev):
+        self.update()
+        super().leaveEvent(ev)
+
     def sizeHint(self):
         fm = QFontMetrics(QFont("Segoe UI", 9, QFont.DemiBold))
-        return QSize(max(fm.horizontalAdvance(self.text()), 56) + self.PAD * 2 + 8, self.HEIGHT)
+        return QSize(max(fm.horizontalAdvance(self.text()), 56) + self.PAD * 2 + 10, self.HEIGHT)
 
     def paintEvent(self, _ev):
         p = QPainter(self)
@@ -325,22 +372,22 @@ class CatalogueCard(QAbstractButton):
         r = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
         on = self.isChecked()
         hover = self.underMouse()
-        p.setBrush(QColor(C["elev"] if hover else C["surface"]))
-        p.setPen(QPen(QColor(C["accent"] if on else C["border2"]), 1))
+        bg = C["cardon"] if on else (C["cardhover"] if hover else C["cardbg"])
+        p.setBrush(QColor(bg))
+        p.setPen(QPen(QColor(C["cardlineon"] if on else C["cardline"]), 1))
         p.drawRoundedRect(r, 8, 8)
         bar = QRectF(r.left() + 1.5, r.top() + 7, 3, r.height() - 14)
         p.setPen(Qt.NoPen)
-        p.setBrush(QColor(self._color if on else C["border2"]))
+        p.setBrush(QColor(self._color if on else C["cardbaroff"]))
         p.drawRoundedRect(bar, 1.5, 1.5)
-        f1 = QFont("Segoe UI", 9, QFont.DemiBold)
-        p.setFont(f1)
-        p.setPen(QColor(C["fg1"] if on else C["fg3"]))
-        p.drawText(QRectF(r.left() + self.PAD + 5, r.top() + 5, r.width() - self.PAD - 9, 18),
+        p.setFont(QFont("Segoe UI", 9, QFont.DemiBold))
+        p.setPen(QColor(C["cardfg_on"] if on else C["cardfg_off"]))
+        p.drawText(QRectF(r.left() + self.PAD + 4, r.top() + 5, r.width() - self.PAD - 8, 18),
                    Qt.AlignLeft | Qt.AlignVCenter, self.text())
         p.setFont(QFont("Segoe UI", 8))
-        p.setPen(QColor(C["fg5"] if not on else C["fg3"]))
+        p.setPen(QColor(C["cardcount_on"] if on else C["cardcount_off"]))
         label = ("%s 个" % format(self._count, ",")) if self._count else t("在线")
-        p.drawText(QRectF(r.left() + self.PAD + 5, r.top() + 22, r.width() - self.PAD - 9, 16),
+        p.drawText(QRectF(r.left() + self.PAD + 4, r.top() + 22, r.width() - self.PAD - 8, 16),
                    Qt.AlignLeft | Qt.AlignVCenter, label)
 
 
@@ -370,12 +417,60 @@ class SectionScroll(QScrollArea):
 
 
 class HScroll(QScrollArea):
-    """A one-row scroll area: the wheel moves it sideways, which is the only axis it has."""
+    """A one-row scroll area: the wheel moves it sideways, a press on a card drags the row, and the bar is a
+    thin overlay rather than a desktop-sized control."""
+
+    QSS = ("QScrollArea{background:transparent;border:none}"
+           "QScrollBar:horizontal{height:6px;background:transparent;margin:0}"
+           "QScrollBar::handle:horizontal{background:#3a4750;border-radius:3px;min-width:28px}"
+           "QScrollBar::handle:horizontal:hover{background:#55656f}"
+           "QScrollBar::handle:horizontal:pressed{background:#6b7d88}"
+           "QScrollBar::add-line,QScrollBar::sub-line{width:0;height:0}"
+           "QScrollBar::add-page,QScrollBar::sub-page{background:transparent}")
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setStyleSheet(self.QSS)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self._press = None
+        self._dragging = False
+
+    def watch(self, card):
+        """Let a press on this card drag the whole row (a plain click still toggles it)."""
+        card.installEventFilter(self)
 
     def wheelEvent(self, ev):
         bar = self.horizontalScrollBar()
         bar.setValue(bar.value() - ev.angleDelta().y())
         ev.accept()
+
+    def eventFilter(self, obj, ev):
+        if not isinstance(obj, CatalogueCard):
+            return super().eventFilter(obj, ev)
+        kind = ev.type()
+        bar = self.horizontalScrollBar()
+        if kind == QEvent.MouseButtonPress and ev.button() == Qt.LeftButton:
+            self._press = (ev.globalPos().x(), bar.value(), obj)
+            self._dragging = False
+            obj.setCursor(Qt.ClosedHandCursor)
+            return False                        # the card still sees the press, so a click can toggle it
+        if kind == QEvent.MouseMove and self._press is not None and (ev.buttons() & Qt.LeftButton):
+            dx = ev.globalPos().x() - self._press[0]
+            if abs(dx) > 4:                     # a few pixels of slack, so a shaky click is still a click
+                self._dragging = True
+                bar.setValue(self._press[1] - dx)
+                return True
+            return False
+        if kind == QEvent.MouseButtonRelease:
+            dragged = self._dragging
+            self._press = None
+            self._dragging = False
+            obj.setCursor(Qt.OpenHandCursor)
+            if dragged:
+                obj.setDown(False)              # the button never saw the release: do not leave it pressed
+                return True                     # and swallow it, so dragging does not toggle the card
+            return False
+        return super().eventFilter(obj, ev)
 
 
 class Switch(QAbstractButton):
@@ -479,8 +574,8 @@ def _list_qss(widget):
             "padding:3px;outline:none}"
             "QListWidget::item{height:%(row)dpx;padding-left:8px;border-radius:3px;color:%(fg2)s}"
             "QListWidget::item:selected{background:%(accent)s;color:%(on_accent)s}"
-            "QListWidget::item:selected:!active{background:%(accent_tint2)s;color:%(accent)s}"
-            "QListWidget::item:hover:!selected{background:%(elev)s;color:%(fg1)s}"
+            "QListWidget::item:selected:!active{background:%(selbg)s;color:%(accent)s}"
+            "QListWidget::item:hover:!selected{background:%(hoverbg)s;color:%(fg1)s}"
             % dict(C, row=_list_row_height(widget)))
 
 
@@ -725,6 +820,55 @@ class _LabelText(QGraphicsSimpleTextItem):
         super().paint(painter, option, widget)
 
 
+class EmptyHint(QGraphicsItem):
+    """What an empty viewer shows: a dashed frame, a small picture glyph, and two lines of text.
+
+    It is drawn rather than assembled from QGraphicsTextItems so the whole hint keeps one alignment and
+    follows a live theme change with a repaint.
+    """
+
+    W, H = 480, 236
+
+    def __init__(self):
+        super().__init__()
+        self._title = t("拖入图片，或点这里打开")
+        self._sub = t("支持 FITS / XISF / TIFF / JPG / PNG")
+        self.setVisible(False)
+
+    def boundingRect(self):
+        return QRectF(-self.W / 2.0, -self.H / 2.0, self.W, self.H)
+
+    def paint(self, p, _opt, _widget=None):
+        p.setRenderHint(QPainter.Antialiasing, True)
+        top = -self.H / 2.0
+        icon = QRectF(-42, top + 2, 84, 84)
+        p.setPen(QPen(QColor(C["fg5"]), 1, Qt.DashLine))
+        p.setBrush(Qt.NoBrush)
+        p.drawRoundedRect(icon, 20, 20)
+        p.setPen(QPen(QColor(C["fg4"]), 1.6))
+        p.setBrush(Qt.NoBrush)
+        p.drawEllipse(QPointF(icon.left() + 24, icon.top() + 24), 5, 5)
+        p.drawPolyline(QPointF(icon.left() + 12, icon.bottom() - 18),
+                       QPointF(icon.left() + 30, icon.bottom() - 38),
+                       QPointF(icon.left() + 44, icon.bottom() - 26),
+                       QPointF(icon.left() + 52, icon.bottom() - 33),
+                       QPointF(icon.right() - 10, icon.bottom() - 18))
+        p.setBrush(QColor(C["fg5"]))
+        p.setPen(Qt.NoPen)
+        p.drawEllipse(QPointF(icon.left() + 24, icon.top() + 24), 2.2, 2.2)
+        f = QFont()
+        f.setPointSize(15)
+        f.setWeight(QFont.DemiBold)
+        p.setFont(f)
+        p.setPen(QColor(C["fg2"]))
+        p.drawText(QRectF(-self.W / 2.0, top + 92, self.W, 30), Qt.AlignHCenter | Qt.AlignTop, self._title)
+        f2 = QFont()
+        f2.setPointSize(10)
+        p.setFont(f2)
+        p.setPen(QColor(C["fg4"]))
+        p.drawText(QRectF(-self.W / 2.0, top + 128, self.W, 24), Qt.AlignHCenter | Qt.AlignTop, self._sub)
+
+
 class ImageView(QGraphicsView):
     moved = pyqtSignal(float, float)      # scene coordinates
     files_dropped = pyqtSignal(list)
@@ -770,11 +914,8 @@ class ImageView(QGraphicsView):
         self._load_timer.setSingleShot(True)
         self._load_timer.timeout.connect(self._show_spinner)
         self._set_grab(False)                  # an empty view shows an arrow cursor and is clickable
-        self.placeholder = self.scene().addText("")
-        self.placeholder.setDefaultTextColor(QColor(C["fg3"]))
-        f = QFont()
-        f.setPointSize(14)
-        self.placeholder.setFont(f)
+        self.placeholder = EmptyHint()
+        self.scene().addItem(self.placeholder)
 
     def eventFilter(self, obj, ev):
         """The wheel must not die on the bar: send it to the viewport, which is where the view scales."""
@@ -842,13 +983,13 @@ class ImageView(QGraphicsView):
         else:
             self.viewport().unsetCursor()
 
-    def set_placeholder(self, text):
-        self.placeholder.setPlainText(text)
-        self.placeholder.setVisible(bool(text))
-        if text:
+    def set_placeholder(self, on):
+        """Show or hide the empty-state hint. The hint draws its own words, so this only takes a flag."""
+        self.placeholder.setVisible(bool(on))
+        if on:
             self.setSceneRect(self.placeholder.boundingRect())
-            self.centerOn(self.placeholder)
-        self._empty = bool(text)
+            self.centerOn(0, 0)
+        self._empty = bool(on)
         self._set_grab(not self._empty)
         self._place_nav()
 
@@ -882,13 +1023,13 @@ class ImageView(QGraphicsView):
     def clear_image(self):
         """Nothing left to show (every image in the folder is gone): back to the empty state."""
         self.pix.setPixmap(QPixmap())
-        self.set_placeholder(t("把图片拖到这里,或点「打开」"))
+        self.set_placeholder(True)
 
     def set_theme(self, theme):
         """Repaint the parts the window's stylesheet cannot reach: the canvas behind the picture and the drop
         hint. Called when the colour scheme changes while the window is open."""
         self.setBackgroundBrush(QColor(theme["canvas"]))
-        self.placeholder.setDefaultTextColor(QColor(theme["fg3"]))
+        self.placeholder.update()
         self.viewport().update()
 
     def _pixmap_for(self, qimage, factor):
@@ -925,7 +1066,7 @@ class ImageView(QGraphicsView):
     def set_image(self, qimage, view=None):
         """view: a _view_state() to restore — only meaningful for a picture of the same pixel size, so the
         caller passes it only when the display size is unchanged (see MainWindow.show_image)."""
-        self.set_placeholder("")
+        self.set_placeholder(False)
         self._source = qimage
         w, h = qimage.width(), qimage.height()
         vw, vh = max(1, self.viewport().width() - 2), max(1, self.viewport().height() - 2)
@@ -1414,7 +1555,7 @@ class FixHeaderDialog(FramedDialog):
         kw = img.keywords
         hint = imageio.hints(img)
         f = QFormLayout()
-        f.setContentsMargins(0, 0, 0, 0)
+        f.setContentsMargins(0, 0, 12, 0)      # keep the fields clear of the scroll bar
         f.setSpacing(SP["3"])
         self.focal = DoubleSpinBox()
         self.focal.setRange(1.0, 10000.0)
@@ -1627,7 +1768,11 @@ class SettingsDialog(FramedDialog):
         self.chk_confirm_del = _toggle(self, t("删除图像前先确认"), bool(cfg.get("confirm_delete", True)))
         self.chk_confirm_del.setStyleSheet(TOGGLE_QSS)
         self.chk_confirm_del.setToolTip(t("关掉后按删除键就直接移入回收站（仍可撤销）"))
-        f.addRow(t("删除确认"), self.chk_confirm_del)
+        row_del = QHBoxLayout()
+        row_del.setContentsMargins(0, 0, 0, 0)
+        row_del.addWidget(self.chk_confirm_del)
+        row_del.addStretch(1)
+        f.addRow(t("删除确认"), row_del)
 
         # ── 解析 ─────────────────────────────────────────────────────────────────────────────
         section("解析")
@@ -1635,12 +1780,20 @@ class SettingsDialog(FramedDialog):
         self.chk_existing.setStyleSheet(TOGGLE_QSS)
         self.chk_existing.setToolTip(t("文件里已经带天体测量解时（ASIAIR/NINA/PixInsight 都会写），"
                                        "先和画面里的星点核对，对得上就直接用，省掉整轮解析。"))
-        f.addRow(t("已有解"), self.chk_existing)
+        row_ex = QHBoxLayout()
+        row_ex.setContentsMargins(0, 0, 0, 0)
+        row_ex.addWidget(self.chk_existing)
+        row_ex.addStretch(1)
+        f.addRow(t("已有解"), row_ex)
         self.chk_debayer = _toggle(self, t("自动解拜耳单次彩色图像"), bool(cfg.get("debayer", True)))
         self.chk_debayer.setStyleSheet(TOGGLE_QSS)
         self.chk_debayer.setToolTip(t("单次彩色相机的原始帧是单通道的马赛克；开启后自动插值成彩色再显示。"
                                       "关掉可查看原始马赛克数据。"))
-        f.addRow(t("解拜耳"), self.chk_debayer)
+        row_db = QHBoxLayout()
+        row_db.setContentsMargins(0, 0, 0, 0)
+        row_db.addWidget(self.chk_debayer)
+        row_db.addStretch(1)
+        f.addRow(t("解拜耳"), row_db)
         self.apikey = QLineEdit(cfg.get("api_key", ""))
         self.apikey.setEchoMode(QLineEdit.PasswordEchoOnEdit)
         self.apikey.setPlaceholderText(t("ttsky_…（点「领取密钥」免费获取）"))
@@ -1736,11 +1889,18 @@ class SettingsDialog(FramedDialog):
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         scroll.setWidget(inner)
         scroll.setMinimumHeight(560)
-        scroll.setMaximumHeight(620)
-        scroll.setMinimumWidth(520)
-        scroll.setStyleSheet('QScrollArea{background:transparent;border:none}')
+        scroll.setMaximumHeight(640)
+        scroll.setMinimumWidth(540)
+        scroll.setStyleSheet(
+            "QScrollArea{background:transparent;border:none}"
+            "QScrollBar:vertical{width:8px;background:transparent;margin:2px 0 2px 0}"
+            "QScrollBar::handle:vertical{background:%s;border-radius:4px;min-height:30px}"
+            "QScrollBar::handle:vertical:hover{background:%s}"
+            "QScrollBar::add-line,QScrollBar::sub-line{height:0;width:0}"
+            "QScrollBar::add-page,QScrollBar::sub-page{background:transparent}"
+            % ("#3a4750" if THEME == "dark" else "#C9D2DA",
+               "#55656f" if THEME == "dark" else "#B3BFC9"))
         scroll.viewport().setAutoFillBackground(False)
-        inner.setStyleSheet('background:transparent')
         self.body.addWidget(scroll, 1)
         self.body.addWidget(bb)
 
@@ -2337,7 +2497,7 @@ class MainWindow(QMainWindow):
         self._advancing = False                   # guards the step() that follows a removal
 
         self.view = ImageView()
-        self.view.set_placeholder(t("把图片拖到这里,或点「打开」"))
+        self.view.set_placeholder(True)
         self.view.moved.connect(self._on_move)
         self.view.files_dropped.connect(self.add_files)
         self.view.zoom_changed.connect(lambda s: self.lbl_zoom.setText("%.0f%%" % (s * 100)))
@@ -2367,6 +2527,7 @@ class MainWindow(QMainWindow):
         self._update_manual = False
         updater.cleanup_old(updater.app_dir())        # a swap leaves the previous install behind
         QTimer.singleShot(1500, self._auto_update_check)
+        self._update_actions()                       # nothing is open yet: the toolbar says so
         if files:
             self.add_files(files)
 
@@ -2403,8 +2564,8 @@ class MainWindow(QMainWindow):
         self.act_play.setToolTip(t("自动播放当前目录下的所有图片"))
         self.addAction(self.act_play)
         tb.addSeparator()
-        act(t("适应窗口"), self.view.fit, "F")
-        act(t("原始大小"), self.view.one_to_one, "1")
+        self.act_fit = act(t("适应窗口"), self.view.fit, "F")
+        self.act_original = act(t("原始大小"), self.view.one_to_one, "1")
         tb.addSeparator()
         tb.addWidget(QLabel(" %s " % t("拉伸")))
         self.cmb_stretch = QComboBox()
@@ -2417,10 +2578,10 @@ class MainWindow(QMainWindow):
         tb.addSeparator()
         self.act_overlay = act(t("显示标注"), self._toggle_overlay, "A", checkable=True)
         self.act_overlay.setChecked(bool(self.cfg.get("show_overlay", True)))
-        act(t("文件头"), self.show_header, "H")
-        act(t("修正文件头"), self.fix_header)
-        act(t("直方图"), self.show_histogram, "L")
-        act(t("撤销删除或移动"), self.undo_last, QKeySequence.Undo)
+        self.act_header = act(t("文件头"), self.show_header, "H")
+        self.act_fix_header = act(t("修正文件头"), self.fix_header)
+        self.act_histogram = act(t("直方图"), self.show_histogram, "L")
+        self.act_undo = act(t("撤销删除或移动"), self.undo_last, QKeySequence.Undo)
         # The image bar's ✖ promises the Delete key in its tooltip; the key itself belongs to the window, not
         # to that button (which never takes focus), so it gets its own action — and no toolbar button of its own.
         self._del_action = QAction(t("删除当前图像（会先确认，删后可撤销）"), self)
@@ -2526,9 +2687,89 @@ class MainWindow(QMainWindow):
         dock.setMinimumWidth(268)                  # wide enough for the rows without a scroll bar
         self.addDockWidget(Qt.LeftDockWidgetArea, dock)
         self.dock_files = dock
-        self._files_action = dock.toggleViewAction()
+        self._files_width = dock.sizeHint().width()
+        self._files_anim = None
+        self._files_user_closed = False            # the toggle was used: a folder refresh must not undo it
+        # A plain toggleViewAction would pop the dock in and out; this action drives the drawer instead, and
+        # follows the dock when the dock is closed by its own ✕.
+        self._files_action = QAction(t("文件夹"), self)
+        self._files_action.setCheckable(True)
         self._files_action.setText(" " + t("文件夹") + " ")
         self._files_action.setToolTip(t("显示或隐藏左侧的同目录图片列表"))
+        self._files_action.triggered.connect(lambda: self._toggle_files())
+        dock.visibilityChanged.connect(self._files_action.setChecked)
+        self._files_action.setChecked(dock.isVisible())
+        dock.hide()                                # nothing to show until a picture is open
+
+    def _update_actions(self):
+        """Grey out everything that needs a picture. A button that does nothing when pressed is a lie about
+        what the window can do right now, so the toolbar follows the state of the viewer."""
+        has = getattr(self, "img", None) is not None
+        for name in ("act_fit", "act_original", "act_overlay", "act_header", "act_fix_header",
+                     "act_histogram", "act_del_action", "_del_action", "_prev_action", "_next_action",
+                     "_bar_action", "_files_action"):
+            a = getattr(self, name, None)
+            if a is not None:
+                a.setEnabled(has)
+        if getattr(self, "act_undo", None) is not None:
+            self.act_undo.setEnabled(has and getattr(self, "_undo_action", None) is not None)
+        if getattr(self, "act_play", None) is not None:
+            self.act_play.setEnabled(has and self.file_list.count() > 0)
+        if getattr(self, "btn_start", None) is not None:
+            self.btn_start.setEnabled(has)
+
+    def _toggle_files(self):
+        """The toolbar button: slide the left list out, or in. The dock's own state decides, not the check
+        mark: a checkable toolbar action can lose its state when the dock is shown or hidden from elsewhere."""
+        show = not self.dock_files.isVisible()
+        self._files_user_closed = not show
+        self._files_action.setChecked(show)
+        self._animate_files(show)
+
+    def _animate_files(self, show):
+        """A drawer, not a pop: the dock's width is animated, so the picture grows into the freed space.
+
+        QMainWindow lays docks out from their width limits, so animating maximumWidth is enough; the minimum
+        has to be relaxed for the duration or the 268-pixel floor would stop the animation at once.
+        """
+        dock = self.dock_files
+        if dock is None:
+            return
+        if self._files_anim is not None:
+            self._files_anim.stop()
+        target = getattr(self, "_files_width", 288) or 288
+        if show:
+            start = dock.width() if dock.isVisible() else 0
+            dock.setMinimumWidth(0)
+            dock.setMaximumWidth(max(0, start))
+            dock.show()
+            end = target
+        else:
+            start = dock.width()
+            self._files_width = start or target
+            dock.setMinimumWidth(0)
+            end = 0
+        anim = QPropertyAnimation(dock, b"maximumWidth", self)
+        anim.setDuration(170)
+        anim.setEasingCurve(QEasingCurve.OutCubic)
+        anim.setStartValue(max(0, start))
+        anim.setEndValue(max(0, end))
+        if show:
+            anim.finished.connect(lambda: (dock.setMinimumWidth(268), dock.setMaximumWidth(16777215),
+                                           self._files_action.setChecked(True)))
+        else:
+            anim.finished.connect(lambda: (dock.hide(), self._files_action.setChecked(False)))
+        anim.finished.connect(lambda: setattr(self, "_files_anim", None))
+        self._files_anim = anim
+        anim.start()
+
+    def _sync_files_dock(self):
+        """Show the left list once there is something in it, hide it when the queue is empty."""
+        has = self.file_list.count() > 0
+        if has and not self.dock_files.isVisible() and not self._files_user_closed:
+            self._animate_files(True)
+        elif not has and self.dock_files.isVisible():
+            self._animate_files(False)
 
     def _build_panel(self):
         """The annotation panel, in the order the work is done: the queue, the target hint, the star
@@ -2537,7 +2778,8 @@ class MainWindow(QMainWindow):
         dock = QDockWidget(t("标注"), self)
         dock.setFeatures(QDockWidget.DockWidgetMovable | QDockWidget.DockWidgetFloatable)
         w = QWidget()
-        w.setStyleSheet(PANEL_QSS)
+        w.setObjectName("panelRoot")
+        w.setStyleSheet(PANEL_QSS + "QWidget#panelRoot{background:%s}" % C["surface"])
         lay = QVBoxLayout(w)
         lay.setContentsMargins(8, 8, 8, 8)
         lay.setSpacing(5)
@@ -2701,6 +2943,8 @@ class MainWindow(QMainWindow):
             row_h.addWidget(card)
         row_h.addStretch(1)
         scroller = HScroll()
+        for card in self.chk_groups.values():
+            scroller.watch(card)
         scroller.setWidgetResizable(True)
         scroller.setFrameShape(QFrame.NoFrame)
         scroller.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
@@ -2708,7 +2952,6 @@ class MainWindow(QMainWindow):
         scroller.setWidget(row_w)
         scroller.setFixedHeight(CatalogueCard.HEIGHT + 18)
         scroller.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
-        scroller.setStyleSheet("QScrollArea{background:transparent;border:none}")
         scroller.viewport().setAutoFillBackground(False)
         self.catalogue_scroll = scroller
         self.controls.addWidget(scroller)
@@ -2832,6 +3075,7 @@ class MainWindow(QMainWindow):
             if first_row is None:
                 first_row = row
         self.cfg["last_dir"] = os.path.dirname(paths[0])
+        self._files_user_closed = False
         if select:
             self.list.setCurrentRow(first_row)
 
@@ -2941,6 +3185,8 @@ class MainWindow(QMainWindow):
         if hasattr(self, "btn_pi"):
             self.btn_pi.setEnabled(self.img is not None)
         self._update_save_button()
+        self._sync_files_dock()
+        self._update_actions()
         self._update_bar()
 
     def _file_row_changed(self, row):
@@ -3864,6 +4110,7 @@ class MainWindow(QMainWindow):
         self._undo_message = message
         self.lbl_info.setText(self._undo_hint())
         self._undo_timer.start(10000)
+        self._update_actions()
 
     def _undo_hint(self):
         return "%s   ·   %s" % (self._undo_message, t("按 Ctrl+Z 撤销"))
@@ -3871,10 +4118,12 @@ class MainWindow(QMainWindow):
     def _expire_undo(self):
         self._undo_action = None
         self._undo_message = ""
+        self._update_actions()
 
     def undo_last(self):
         action, self._undo_action = self._undo_action, None
         self._undo_timer.stop()
+        self._update_actions()
         if action:
             action()
 
@@ -3891,6 +4140,12 @@ class MainWindow(QMainWindow):
         super().showEvent(ev)
         # the window's own title bar is drawn by Windows, not by Qt: tell it which theme the app is in
         _paint_title_bar(self, THEME == "dark")
+        # QMainWindow shows every dock when the window appears, including the one hidden before it: an empty
+        # folder list should stay out of the way until there is something in it.
+        if getattr(self, "dock_files", None) is not None and not self._files_user_closed:
+            if self.file_list.count() == 0:
+                self.dock_files.hide()
+            self._files_action.setChecked(self.dock_files.isVisible())
 
 
 def _paint_title_bar(win, dark: bool = True) -> None:
