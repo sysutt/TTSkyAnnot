@@ -9,6 +9,7 @@ buttons over the picture step through it. Exits non-zero when a check fails.
 import contextlib
 import os
 import shutil
+import tempfile
 import sys
 import time
 
@@ -28,7 +29,7 @@ from PyQt5.QtGui import QMouseEvent                      # noqa: E402
 from PyQt5.QtTest import QTest                          # noqa: E402
 from PyQt5.QtWidgets import QApplication, QFileDialog   # noqa: E402
 
-from skyannot import catalogue, config, gui, run          # noqa: E402
+from skyannot import catalogue, config, gui, run, updater  # noqa: E402
 
 TMP = os.path.join(ROOT, ".skyannot_test")
 failures = []
@@ -2338,6 +2339,21 @@ def main():
           os.path.basename(win.current or "") == "frame.png", str(win.current))
 
     win.close()
+    # 4v ── how the update installs itself: the wizard for an installed copy, the zip swap for a portable one
+    inst = tempfile.mkdtemp(prefix="tts-inst-")
+    try:
+        check("a portable folder is not an install", not updater.is_installed(inst))
+        open(os.path.join(inst, "unins000.exe"), "wb").close()
+        check("unins000.exe beside the program means an install", updater.is_installed(inst))
+        feed = {"setup": "https://example.com/TTSkyAnnot-Setup-9.9.9.exe",
+                "setup_sha256": "abc", "setup_size": 123}
+        check("a feed with an installer is recognised", updater.has_setup(feed) and not updater.has_setup({}))
+        sub = updater.setup_feed(feed)
+        check("the installer half is a normal feed",
+              sub["url"].endswith(".exe") and sub["sha256"] == "abc" and sub["size"] == 123, str(sub))
+    finally:
+        shutil.rmtree(inst, ignore_errors=True)
+
     print("\n%d failure(s)" % len(failures))
     return 1 if failures else 0
 

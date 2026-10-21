@@ -86,10 +86,42 @@ if (-not (Test-Path (Join-Path $BuildDir "TTSkyAnnot.exe"))) { Fail "no build at
 Step "signing the build"
 & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "sign.ps1") -Dist $BuildDir | Out-Null
 
+# ── 2b. the Windows installer ───────────────────────────────────────────────
+# The portable zip is for people who like a folder; the installer is for everyone else: Start Menu entry,
+# uninstaller, per-user install by default (no admin prompt), which keeps the program folder writable for
+# config.json and the in-app updater. Built before the feed is written, so version.json can point at it.
+$script:setupExe = ""
+if (-not $SkipInstaller) {
+    Step "building the Windows installer"
+    $iscc = $InnoPath
+    if (-not $iscc) {
+        foreach ($c in @((Join-Path $env:LOCALAPPDATA "Programs\Inno Setup 6\ISCC.exe"),
+                         (Join-Path ${env:ProgramFiles(x86)} "Inno Setup 6\ISCC.exe"),
+                         (Join-Path $env:ProgramFiles "Inno Setup 6\ISCC.exe"))) {
+            if ($c -and (Test-Path $c)) { $iscc = $c; break }
+        }
+    }
+    if (-not $iscc) {
+        Write-Host "   Inno Setup not found; the installer is skipped (winget install JRSoftware.InnoSetup)" -ForegroundColor Yellow
+    } else {
+        $setupDir = Join-Path $root "setup"
+        New-Item -ItemType Directory -Force -Path $setupDir | Out-Null
+        & $iscc ("/DVersion=" + $Version) ("/DBuildDir=" + $BuildDir) (Join-Path $PSScriptRoot "installer.iss") |
+            Select-Object -Last 3 | ForEach-Object { Write-Host "   $_" }
+        if ($LASTEXITCODE -ne 0) { Fail "Inno Setup failed ($LASTEXITCODE)" }
+        $setupExe = Join-Path $setupDir ("TTSkyAnnot-Setup-" + $Version + ".exe")
+        if (-not (Test-Path $setupExe)) { Fail "no installer at $setupExe" }
+        & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "sign.ps1") `
+            -Dist $InstallDir -Extra $setupExe | Select-Object -Last 2 | ForEach-Object { Write-Host "   $_" }
+        Write-Host ("   built " + (Split-Path $setupExe -Leaf) + " (" + [math]::Round((Get-Item $setupExe).Length / 1MB, 1) + " MB)") -ForegroundColor Green
+        $script:setupExe = $setupExe
+    }
+}
+
 # ── 3. package ──────────────────────────────────────────────────────────────
 Step "packaging into $Feed"
 & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "publish.ps1") `
-    -Version $Version -Notes $Notes -Feed $Feed -Dist $BuildDir -Keep 2 | Select-Object -Last 4 | ForEach-Object { Write-Host "   $_" }
+    -Version $Version -Notes $Notes -Feed $Feed -Dist $BuildDir -Keep 2 -SetupPath $setupExe | Select-Object -Last 4 | ForEach-Object { Write-Host "   $_" }
 $zipPath = Join-Path $Feed $zipName
 $feedPath = Join-Path $Feed "version.json"
 if (-not (Test-Path $zipPath)) { Fail "no package at $zipPath" }
@@ -118,62 +150,35 @@ if (-not $SkipUpload) {
     if ($LASTEXITCODE -ne 0) { Write-Host "   (could not prune the older packages on the server)" -ForegroundColor Yellow }
 }
 
-# ── 4b. the Windows installer ───────────────────────────────────────────────
-# The portable zip is for people who like a folder; the installer is for everyone else: Start Menu entry,
-# uninstaller, per-user install by default (no admin prompt), which keeps the program folder writable for
-# config.json and the in-app updater.
-if (-not $SkipInstaller) {
-    Step "building the Windows installer"
-    $iscc = $InnoPath
-    if (-not $iscc) {
-        foreach ($c in @((Join-Path $env:LOCALAPPDATA "Programs\Inno Setup 6\ISCC.exe"),
-                         (Join-Path ${env:ProgramFiles(x86)} "Inno Setup 6\ISCC.exe"),
-                         (Join-Path $env:ProgramFiles "Inno Setup 6\ISCC.exe"))) {
-            if ($c -and (Test-Path $c)) { $iscc = $c; break }
-        }
-    }
-    if (-not $iscc) {
-        Write-Host "   Inno Setup not found; the installer is skipped (winget install JRSoftware.InnoSetup)" -ForegroundColor Yellow
+# ── 4b. upload the installer ────────────────────────────────────────────────
+if ($setupExe -and (Test-Path $setupExe) -and -not $SkipUpload) {
+    Step "uploading the installer"
+    $setupName = Split-Path $setupExe -Leaf
+    & scp @sshOpts $setupExe "${Remote}:/tmp/$setupName" | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "   installer upload failed (skipped)" -ForegroundColor Yellow
     } else {
-        $setupDir = Join-Path $root "setup"
-        New-Item -ItemType Directory -Force -Path $setupDir | Out-Null
-        & $iscc ("/DVersion=" + $Version) ("/DBuildDir=" + $BuildDir) (Join-Path $PSScriptRoot "installer.iss") |
-            Select-Object -Last 3 | ForEach-Object { Write-Host "   $_" }
-        if ($LASTEXITCODE -ne 0) { Fail "Inno Setup failed ($LASTEXITCODE)" }
-        $setupExe = Join-Path $setupDir ("TTSkyAnnot-Setup-" + $Version + ".exe")
-        if (-not (Test-Path $setupExe)) { Fail "no installer at $setupExe" }
-        & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "sign.ps1") `
-            -Dist $InstallDir -Extra $setupExe | Select-Object -Last 2 | ForEach-Object { Write-Host "   $_" }
-        Write-Host ("   built " + (Split-Path $setupExe -Leaf) + " (" + [math]::Round((Get-Item $setupExe).Length / 1MB, 1) + " MB)") -ForegroundColor Green
-
-        if (-not $SkipUpload) {
-            Step "uploading the installer"
-            $setupName = Split-Path $setupExe -Leaf
-            & scp @sshOpts $setupExe "${Remote}:/tmp/$setupName" | Out-Null
-            if ($LASTEXITCODE -ne 0) {
-                Write-Host "   installer upload failed (skipped)" -ForegroundColor Yellow
-            } else {
-                $cmd = "sudo install -d -o www-data -g www-data '$RemoteSetup' && " +
-                       "sudo install -o www-data -g www-data -m 644 '/tmp/$setupName' '$RemoteSetup/$setupName' && " +
-                       "sudo install -o www-data -g www-data -m 644 '/tmp/$setupName' '$RemoteSetup/TTSkyAnnot-Setup.exe' && " +
-                       "ls -l '$RemoteSetup' | tail -4"
-                & ssh @sshOpts $Remote $cmd | ForEach-Object { Write-Host "   $_" }
-                if ($LASTEXITCODE -ne 0) {
-                    Write-Host "   installing the installer on the server failed" -ForegroundColor Yellow
-                } else {
-                    $live = & curl.exe -s -o NUL -w "%{http_code} %{size_download}" ($SetupBase + "TTSkyAnnot-Setup.exe")
-                    Write-Host ("   live: " + $live) -ForegroundColor Green
-                    # keep the two newest installers on the server as well
-                    $prune = "cd '$RemoteSetup' && ls -1t TTSkyAnnot-Setup-*.exe | tail -n +3 | xargs -r sudo rm -f"
-                    & ssh @sshOpts $Remote $prune | Out-Null
-                }
-            }
+        $cmd = "sudo install -d -o www-data -g www-data '$RemoteSetup' && " +
+               "sudo install -o www-data -g www-data -m 644 '/tmp/$setupName' '$RemoteSetup/$setupName' && " +
+               "sudo install -o www-data -g www-data -m 644 '/tmp/$setupName' '$RemoteSetup/TTSkyAnnot-Setup.exe' && " +
+               "ls -l '$RemoteSetup' | tail -4"
+        & ssh @sshOpts $Remote $cmd | ForEach-Object { Write-Host "   $_" }
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "   installing the installer on the server failed" -ForegroundColor Yellow
+        } else {
+            $live = & curl.exe -s -o NUL -w "%{http_code} %{size_download}" ($SetupBase + "TTSkyAnnot-Setup.exe")
+            Write-Host ("   live: " + $live) -ForegroundColor Green
+            # keep the two newest installers on the server as well
+            $prune = "cd '$RemoteSetup' && ls -1t TTSkyAnnot-Setup-*.exe | tail -n +3 | xargs -r sudo rm -f"
+            & ssh @sshOpts $Remote $prune | Out-Null
         }
-        # keep the two newest installers locally
-        Get-ChildItem $setupDir -Filter "TTSkyAnnot-Setup-*.exe" |
-            Sort-Object LastWriteTime -Descending | Select-Object -Skip 2 |
-            ForEach-Object { Remove-Item $_.FullName -Force; Write-Host ("   removed old installer: " + $_.Name) }
     }
+}
+if ($setupExe -and (Test-Path $setupExe)) {
+    # keep the two newest installers locally
+    Get-ChildItem (Split-Path $setupExe -Parent) -Filter "TTSkyAnnot-Setup-*.exe" |
+        Sort-Object LastWriteTime -Descending | Select-Object -Skip 2 |
+        ForEach-Object { Remove-Item $_.FullName -Force; Write-Host ("   removed old installer: " + $_.Name) }
 }
 
 # ── 5. verify what the public URL serves ────────────────────────────────────

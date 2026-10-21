@@ -11,7 +11,9 @@ param(
     [string]$Notes = "",
     [string]$Feed = "E:\SkyAnnot\updates",
     [string]$Dist = "E:\SkyAnnot\dist\TTSkyAnnot",
-    [int]$Keep = 2
+    [int]$Keep = 2,
+    [string]$SetupPath = "",
+    [string]$SetupBase = "https://www.ttastro.com/ttskyannot/setup/"
 )
 
 $ErrorActionPreference = "Stop"
@@ -76,6 +78,13 @@ gives "DLL load failed while importing QtCore".
         size    = $size
         notes   = $Notes
         built   = (Get-Date).ToString("yyyy-MM-dd HH:mm")
+    }
+    # The installer lives under /ttskyannot/setup/ rather than beside the feed, so its address is absolute:
+    # an installed copy downloads it and hands over to the wizard, which knows how to replace itself.
+    if ($SetupPath -and (Test-Path $SetupPath)) {
+        $feedData.setup = $SetupBase.TrimEnd("/") + "/" + (Split-Path $SetupPath -Leaf)
+        $feedData.setup_sha256 = (Get-FileHash $SetupPath -Algorithm SHA256).Hash.ToLower()
+        $feedData.setup_size = (Get-Item $SetupPath).Length
     }
     $json = $feedData | ConvertTo-Json -Depth 3
     [System.IO.File]::WriteAllText((Join-Path $Feed "version.json"), $json, (New-Object System.Text.UTF8Encoding($false)))

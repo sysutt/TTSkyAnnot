@@ -160,6 +160,8 @@ _EN = {
     "未解析": "not solved",
     "已解析": "solved",
     "已拉伸": "already stretched",
+    "下载完成后程序会关闭，随后打开安装程序，按向导完成更新。": "The program will close when the download finishes, then the installer opens: follow its wizard.",
+    "只有打包后的程序才能替换自己。": "Only a packaged build can replace itself.",
     "拖入图片，或点这里打开": "Drop an image here, or click to open",
     "支持 FITS / XISF / TIFF / JPG / PNG": "FITS / XISF / TIFF / JPG / PNG supported",
     "ttsky_…（点「领取密钥」免费获取）": "ttsky_… (click Get a key, it is free)",
