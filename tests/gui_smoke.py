@@ -2387,6 +2387,26 @@ def main():
           os.path.basename(win.current or "") == "frame.png", str(win.current))
 
     win.close()
+    # 4u2 ── the catalogue switches decide what is drawn and how it is labelled
+    from skyannot import shapes                            # noqa: E402
+    w2 = WCS(naxis=2)
+    w2.wcs.ctype = ["RA---TAN", "DEC--TAN"]
+    w2.wcs.crval = [10.6847, 41.2690]                      # M31, which is also NGC224
+    w2.wcs.crpix = [250.0, 250.0]
+    w2.wcs.cd = [[-6.0e-4, 0.0], [0.0, 6.0e-4]]
+    proj2 = annotate.Projector(w2, 500, 500)
+    by_ngc = {s["name"]: s for s in shapes.collect(proj2, cats=("ngc",))}
+    check("with NGC on, M31 is listed and labelled by its NGC number",
+          by_ngc["NGC224"]["category"] == "ngc" and by_ngc["NGC224"]["label"].startswith("NGC224"),
+          by_ngc["NGC224"]["label"])
+    by_m = {s["name"]: s for s in shapes.collect(proj2, cats=("m",))}
+    check("with Messier on, the same object is M31",
+          by_m["NGC224"]["category"] == "m" and by_m["NGC224"]["label"].startswith("M31"),
+          by_m["NGC224"]["label"])
+    by_ic = {s["name"]: s for s in shapes.collect(proj2, cats=("ic",))}
+    check("with only IC on, an object no enabled catalogue holds is left out",
+          "NGC224" not in by_ic, str(sorted(by_ic)[:4]))
+
     # 4v ── how the update installs itself: the wizard for an installed copy, the zip swap for a portable one
     inst = tempfile.mkdtemp(prefix="tts-inst-")
     try:

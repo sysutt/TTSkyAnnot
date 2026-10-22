@@ -41,7 +41,7 @@ from PyQt5.QtWidgets import (QAbstractButton, QAbstractItemView, QAction, QAppli
 from . import (__version__, catalogs, catalogue, config, debayer, fileop, histview, imageio, piopen, reveal,
                run, style, tickwhale, updater, vizier, wcsio)
 from . import histogram as hist_mod
-from . import shapes as shapes_mod
+from . import annotate, shapes as shapes_mod
 from .i18n import set_language, t
 
 ACCENT = "#68E098"
@@ -624,11 +624,12 @@ def _list_row_height(widget):
 class LoadWorker(QThread):
     done = pyqtSignal(object)            # dict
 
-    def __init__(self, path, stretch, debayer=True, bayer_pattern="auto", parent=None):
+    def __init__(self, path, stretch, debayer=True, bayer_pattern="auto", parent=None, dso_cats=None):
         super().__init__(parent)
         self.path, self.stretch = path, stretch
         self.debayer = debayer
         self.bayer_pattern = bayer_pattern
+        self.dso_cats = dso_cats            # enabled deep-sky catalogues, for a frame with a header solution
 
     def run(self):
         out = {"path": self.path}
@@ -651,7 +652,8 @@ class LoadWorker(QThread):
             out["wcs"] = wcs
             if wcs is not None:
                 try:
-                    out["shapes"], out["named"], out["grid"] = run.local_overlay(img, wcs)
+                    out["shapes"], out["named"], out["grid"] = run.local_overlay(
+                        img, wcs, cats=self.dso_cats)
                 except Exception:
                     out["shapes"], out["named"], out["grid"] = [], [], []
         except Exception as e:
@@ -3363,7 +3365,8 @@ class MainWindow(QMainWindow):
         self._view_state = None if same else self.view._view_state()
         self.loader = ld = LoadWorker(path, self.cmb_stretch.currentData(),
                                       bool(self.cfg.get("debayer", True)),
-                                      self.cfg.get("bayer_pattern", "auto"), self)
+                                      self.cfg.get("bayer_pattern", "auto"), self,
+                                      dso_cats=self._groups_on())
         ld.done.connect(self._loaded)
         ld.start()
 
@@ -3498,6 +3501,20 @@ class MainWindow(QMainWindow):
         data = self.overlay_data.get(self.current)
         if self.act_overlay.isChecked() and data:
             on, extra = self._groups_on(), self._extras_on()
+            # Switching a catalogue changes the label of a dual object (M31 under Messier, NGC224 under NGC),
+            # and the shapes carry that label, so they are rebuilt from the frame's own solution. The shapes
+            # stored with the result are replaced too, so a preview saved from here follows the same choice.
+            if self.img is not None and getattr(self, "wcs", None) is not None:
+                try:
+                    P = annotate.Projector(self.wcs, self.img.width, self.img.height)
+                    fresh = shapes_mod.collect(P, cats=on)
+                    data = (fresh, data[1], data[2])
+                    self.overlay_data[self.current] = data
+                    res = self.results.get(self.current)
+                    if res is not None:
+                        res.shapes = fresh
+                except Exception:
+                    pass
             self.view.draw_overlay(data[0], data[1], data[2] if "grid" in extra else None,
                                    categories=set(on), show_named="named" in extra,
                                    shape_style=self.cmb_shape.currentData())
