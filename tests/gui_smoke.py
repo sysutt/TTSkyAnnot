@@ -1256,6 +1256,16 @@ def main():
           str([bool(c.styleSheet()) for c in dlg.chk.values()]))
     check("the remember box is a real check box, not a pill",
           dlg.remember.styleSheet() != gui.TOGGLE_QSS, dlg.remember.styleSheet()[:40])
+    # the save dialog can write into a folder picked right there, not only beside the picture
+    out = tempfile.mkdtemp(prefix="tts-save-")
+    try:
+        dlg.ed_dir.setText(out)
+        first = dlg.where.text().splitlines()[0]
+        check("the targets follow the chosen folder", first.startswith(out), first[:60])
+        check("and the dialog reports that folder", dlg.flags().get("_out_dir") == out, dlg.flags().get("_out_dir"))
+    finally:
+        shutil.rmtree(out, ignore_errors=True)
+    dlg.close()
     # Qt paints the indicator itself, so it has to be told the colours or it draws an invisible dark box
     for name in ("dark", "light"):
         gui.set_theme(name)

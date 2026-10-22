@@ -684,6 +684,8 @@ class AnnotateWorker(QThread):
                     self.save_prompt.emit(self, res, path)
                     self._reply.wait(300)          # the window always answers; the cap is a safety net
                     flags = self._answer or {}
+                    if flags.get("_out_dir"):
+                        self.opt.out_dir = flags["_out_dir"]      # the folder picked in the dialog
                     if flags.get("_remember"):                    # "use this from now on"
                         self.opt.write_txt = bool(flags.get("txt"))
                         self.opt.write_outlines = bool(flags.get("outlines"))
@@ -1958,10 +1960,12 @@ class SaveDialog(FramedDialog):
     says what should land in the folder. Every output can be switched off here, so a solve can be looked at
     and thrown away."""
 
-    def __init__(self, path, items, defaults=None, parent=None):
+    def __init__(self, path, items, defaults=None, parent=None, start_dir=""):
         super().__init__(parent, t("保存解析结果"))
-        self.setMinimumWidth(460)
+        self.setMinimumWidth(520)
         defaults = defaults or {}
+        self._items = list(items) if items else [path]
+        self._path = path
         lay = self.body
         lay.setContentsMargins(SP["3"], 0, SP["3"], 0)
         lay.setSpacing(SP["3"])
@@ -1972,11 +1976,26 @@ class SaveDialog(FramedDialog):
         lay.addWidget(head)
         lay.addSpacing(SP["2"])
 
-        # what will be written, and where
-        where = QLabel(items[0] if items else path)
-        where.setObjectName("note")
-        where.setWordWrap(True)
-        lay.addWidget(where)
+        # what will be written: every target, so the choice below is concrete
+        self.where = QLabel("\n".join(self._items))
+        self.where.setObjectName("note")
+        self.where.setWordWrap(True)
+        lay.addWidget(self.where)
+
+        # and where it goes: next to the picture by default, or a folder chosen here for this save
+        row = QHBoxLayout()
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(SP["3"])
+        row.addWidget(QLabel(t("保存到")))
+        self.ed_dir = QLineEdit(start_dir or os.path.dirname(self._items[0]))
+        self.ed_dir.setToolTip(t("默认写在图片旁边；可以改成别的文件夹，目录不存在时会自动创建"))
+        self.ed_dir.textChanged.connect(self._dir_changed)
+        row.addWidget(self.ed_dir, 1)
+        btn_dir = QPushButton(t("浏览…"))
+        btn_dir.setCursor(Qt.PointingHandCursor)
+        btn_dir.clicked.connect(self._pick_dir)
+        row.addWidget(btn_dir)
+        lay.addLayout(row)
         lay.addSpacing(SP["5"])
 
         self.chk = {}
@@ -2018,6 +2037,17 @@ class SaveDialog(FramedDialog):
         self.cancelled = False
         lay.addWidget(bb)
 
+    def _dir_changed(self, text):
+        """Show the targets the way they would be written with the folder now in the field."""
+        folder = text.strip() or os.path.dirname(self._items[0])
+        self.where.setText("\n".join(os.path.join(folder, os.path.basename(p)) for p in self._items))
+
+    def _pick_dir(self):
+        folder = QFileDialog.getExistingDirectory(self, t("选择保存目录"),
+                                                  self.ed_dir.text().strip() or os.path.dirname(self._path))
+        if folder:
+            self.ed_dir.setText(folder)
+
     def _cancel_run(self):
         self.cancelled = True
         self.reject()
@@ -2027,6 +2057,7 @@ class SaveDialog(FramedDialog):
         out = {k: c.isChecked() for k, c in self.chk.items()}
         out["_remember"] = self.remember.isChecked()
         out["_cancel"] = self.cancelled
+        out["_out_dir"] = self.ed_dir.text().strip()
         return out
 
 
@@ -3754,7 +3785,8 @@ class MainWindow(QMainWindow):
         offered here, so a solve can be inspected and then thrown away without touching the folder."""
         d = SaveDialog(path, run.output_paths(path, worker.opt),
                        {"txt": worker.opt.write_txt, "outlines": worker.opt.write_outlines,
-                        "preview": worker.opt.write_preview, "wcs": worker.opt.write_wcs}, self)
+                        "preview": worker.opt.write_preview, "wcs": worker.opt.write_wcs}, self,
+                       start_dir=worker.opt.out_dir)
         accepted = d.exec_() == QDialog.Accepted
         flags = d.flags() if accepted else {k: False for k in ("txt", "outlines", "preview", "wcs")}
         if d.remember.isChecked() and accepted:
@@ -3851,12 +3883,14 @@ class MainWindow(QMainWindow):
             return
         d = SaveDialog(path, run.output_paths(path, self._last_opt or run.Options()),
                        {"txt": self.cfg["write_txt"], "outlines": self.cfg["write_outlines"],
-                        "preview": self.cfg["write_preview"], "wcs": self.cfg["write_wcs"]}, self)
+                        "preview": self.cfg["write_preview"], "wcs": self.cfg["write_wcs"]}, self,
+                       start_dir=(self._last_opt.out_dir if self._last_opt else ""))
         if d.exec_() != QDialog.Accepted:
             return
         flags = d.flags()
         opt = replace(self._last_opt, write_txt=flags["txt"], write_outlines=flags["outlines"],
-                      write_preview=flags["preview"], write_wcs=flags["wcs"])
+                      write_preview=flags["preview"], write_wcs=flags["wcs"],
+                      out_dir=flags.get("_out_dir", ""))
         try:
             img = imageio.load(path, want_debayer=opt.debayer,
                                pattern="" if opt.bayer_pattern == "auto" else opt.bayer_pattern)
