@@ -994,6 +994,35 @@ def main():
     check("and is saved with the other settings", dlg.values()["theme"] == "light",
           str(dlg.values().get("theme")))
     check("the switch names the state it is in", dlg.lbl_theme.text() == "浅色", dlg.lbl_theme.text())
+
+    # scrolling the settings page must not edit the numbers it rolls past
+    from PyQt5.QtGui import QWheelEvent
+    from PyQt5.QtCore import QPointF
+
+    def wheel(widget, dy=120):
+        ev = QWheelEvent(QPointF(8, 8), QPointF(8, 8), QPoint(0, 0), QPoint(0, dy),
+                         Qt.NoButton, Qt.NoModifier, Qt.NoScrollPhase, False)
+        QApplication.sendEvent(widget, ev)
+
+    before = dlg.gmag.value()
+    wheel(dlg.gmag)
+    check("the wheel leaves an unfocused number field alone", dlg.gmag.value() == before,
+          str(dlg.gmag.value()))
+
+    class _Focused(gui.DoubleSpinBox):
+        def hasFocus(self):
+            return True
+
+    focused = _Focused()
+    focused.setRange(0, 30)
+    focused.setValue(16.0)
+    wheel(focused)
+    check("but works once the field has been clicked", focused.value() != 16.0, str(focused.value()))
+    focused.deleteLater()
+    lang = dlg.lang.currentIndex()
+    wheel(dlg.lang)
+    check("and a combo box does not change while scrolling either", dlg.lang.currentIndex() == lang,
+          str(dlg.lang.currentIndex()))
     dlg.theme_switch.setChecked(False)
     check("flipping it back is dark again", dlg.theme_name() == "dark", dlg.theme_name())
     win.cfg["theme"] = "dark"
@@ -1112,9 +1141,17 @@ def main():
     win.ed_target.clear()
     win._target_typed("")
     dlg = gui.SettingsDialog(win.cfg, win)
-    check("the online catalogue address is offered in the settings",
-          dlg.tw.text().startswith("http"), dlg.tw.text())
-    check("and is saved with the other settings", dlg.values()["tickwhale_base"] == dlg.tw.text())
+    check("the online catalogue address is not a user setting any more",
+          not hasattr(dlg, "tw") and dlg.values()["tickwhale_base"] == win.cfg["tickwhale_base"],
+          str(dlg.values().get("tickwhale_base")))
+
+    # 4q2 ── PixInsight is found for the user, not hunted by them
+    from skyannot import piopen                             # noqa: E402
+    found = piopen.find()
+    check("PixInsight is detected on this machine", bool(found) and os.path.isfile(found), found or "none")
+    check("the settings show what was found and offer to fill it in",
+          hasattr(dlg, "_detect_pixinsight") and dlg.pi.placeholderText().startswith("留空 = 自动查找"),
+          dlg.pi.placeholderText()[:40])
 
     # 4r ── ASTAP: the path, and why a failure must not be silent
     from skyannot import solve as solvemod                 # noqa: E402
@@ -2303,11 +2340,12 @@ def main():
     check("the swap waits for the running program", "tasklist" in body and "4242" in body, "")
     check("and carries the user's settings over", "config.json" in body and "start" in body, "")
     sd = gui.SettingsDialog(win.cfg, win)
-    sd.upd.setText("E:\\updates")
-    check("the update source is a setting", sd.values().get("update_url") == "E:\\updates",
+    check("the update source is not a user setting any more",
+          not hasattr(sd, "upd") and sd.values().get("update_url") == win.cfg.get("update_url"),
           str(sd.values().get("update_url")))
     sd.deleteLater()
     check("the status bar offers a manual check", bool(win.btn_update.text()), win.btn_update.text())
+    check("and so does the toolbar, always in sight", win.act_update.text() != "", win.act_update.text())
 
     # 7b ── a frame's low-resolution preview is not listed beside it
     # The ASIAIR writes a 244 x 160 *_thn.jpg next to every 6248 x 4176 FITS. The list compares picture sizes,

@@ -558,7 +558,18 @@ def _paint_spin_arrows(widget):
 
 
 class SpinBox(QSpinBox):
-    """A QSpinBox that keeps its arrows under a stylesheet (see _paint_spin_arrows)."""
+    """A QSpinBox that keeps its arrows under a stylesheet (see _paint_spin_arrows) and leaves the wheel to
+    the page it sits on until the field has been clicked.
+
+    The wheel guard is written out in each class instead of a mixin because a Python mixin in front of a sip
+    class crashes PyQt5 here; calling the base directly is the safe shape.
+    """
+
+    def wheelEvent(self, ev):
+        if self.hasFocus():
+            QSpinBox.wheelEvent(self, ev)
+        else:
+            ev.ignore()                      # ignored events propagate to the scrolling parent
 
     def paintEvent(self, ev):
         super().paintEvent(ev)
@@ -566,11 +577,27 @@ class SpinBox(QSpinBox):
 
 
 class DoubleSpinBox(QDoubleSpinBox):
-    """A QDoubleSpinBox that keeps its arrows under a stylesheet (see _paint_spin_arrows)."""
+    """A QDoubleSpinBox with the same two refinements as SpinBox."""
+
+    def wheelEvent(self, ev):
+        if self.hasFocus():
+            QDoubleSpinBox.wheelEvent(self, ev)
+        else:
+            ev.ignore()
 
     def paintEvent(self, ev):
         super().paintEvent(ev)
         _paint_spin_arrows(self)
+
+
+class ComboBox(QComboBox):
+    """A combo box that only changes on the wheel after it has been clicked."""
+
+    def wheelEvent(self, ev):
+        if self.hasFocus():
+            QComboBox.wheelEvent(self, ev)
+        else:
+            ev.ignore()
 
 
 def _list_qss(widget):
@@ -1756,7 +1783,7 @@ class SettingsDialog(FramedDialog):
 
         # ── 界面 ─────────────────────────────────────────────────────────────────────────────
         section("界面")
-        self.lang = QComboBox()
+        self.lang = ComboBox()
         for code, name in (("", t("跟随系统")), ("zh", "中文"), ("en", "English")):
             self.lang.addItem(name, code)
         self.lang.setCurrentIndex(max(0, self.lang.findData(cfg.get("language", ""))))
@@ -1830,18 +1857,12 @@ class SettingsDialog(FramedDialog):
         f.addRow(t("nova API key"), self.nova)
 
         # ── 星表与天体库 ─────────────────────────────────────────────────────────────────────
-        section("星表与天体库")
+        section("星表")
         self.gmag = DoubleSpinBox()
         self.gmag.setRange(8, 21)
         self.gmag.setDecimals(1)
         self.gmag.setValue(float(cfg.get("gaia_mag", 16)))
         f.addRow(t("Gaia 星等上限"), self.gmag)
-        self.tw = QLineEdit(cfg.get("tickwhale_base", ""))
-        self.tw.setPlaceholderText("https://app.tickwhale.com")
-        self.tw.setToolTip(t("在线天体库地址。填了它，天体名输入框会在本地星表之外再查这个库"
-                             "（LBN/LDN 等本地没有的编号都在那里）；留空则只查本地星表。"))
-        f.addRow(t("在线天体库"), self.tw)
-
         # ── 输出 ─────────────────────────────────────────────────────────────────────────────
         section("输出")
         self.out = QLineEdit(cfg.get("out_dir", ""))
@@ -1863,26 +1884,21 @@ class SettingsDialog(FramedDialog):
         self.slide.setValue(float(cfg.get("slide_interval", 2.0)))
         f.addRow(t("自动播放间隔"), self.slide)
         self.pi = QLineEdit(cfg.get("pixinsight_path", ""))
+        found_pi = piopen.find()
+        self.pi.setPlaceholderText(t("留空 = 自动查找") + ("：" + found_pi if found_pi else ""))
+        self.pi.setToolTip(t("留空即可：程序会从注册表和各硬盘的常见位置自动找到 PixInsight；"
+                             "只有装在很特别的位置时才需要手动指定。"))
         b_pi = QPushButton(t("浏览…"))
         b_pi.clicked.connect(lambda: self._browse(self.pi, file=True))
+        b_detect = QPushButton(t("自动检测"))
+        b_detect.setToolTip(t("现在就让程序找一次，并把找到的路径填进来"))
+        b_detect.clicked.connect(self._detect_pixinsight)
         row_pi = QHBoxLayout()
         row_pi.setContentsMargins(0, 0, 0, 0)
         row_pi.addWidget(self.pi)
+        row_pi.addWidget(b_detect)
         row_pi.addWidget(b_pi)
         f.addRow(t("PixInsight 路径"), row_pi)
-
-        # ── 更新 ─────────────────────────────────────────────────────────────────────────────
-        section("更新")
-        self.upd = QLineEdit(cfg.get("update_url", ""))
-        self.upd.setToolTip(t("更新源：放着 version.json 的地址、网络共享或文件夹。留空则启动时不检查更新，"
-                              "仍可用状态栏的「检查更新」手动查。"))
-        b_upd = QPushButton(t("浏览…"))
-        b_upd.clicked.connect(lambda: self._browse(self.upd, file=False))
-        row_upd = QHBoxLayout()
-        row_upd.setContentsMargins(0, 0, 0, 0)
-        row_upd.addWidget(self.upd)
-        row_upd.addWidget(b_upd)
-        f.addRow(t("更新源"), row_upd)
 
         bb = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         bb.button(QDialogButtonBox.Ok).setText(t("确定"))
@@ -1917,6 +1933,15 @@ class SettingsDialog(FramedDialog):
         self.body.addWidget(scroll, 1)
         self.body.addWidget(bb)
 
+    def _detect_pixinsight(self):
+        """Fill the field with what auto-detection finds, so nobody has to hunt for the executable."""
+        path = piopen.find()
+        if path:
+            self.pi.setText(path)
+            return
+        QMessageBox.information(self, "TTSkyAnnot",
+                                t("没有找到 PixInsight，请用「浏览…」手动选择它的可执行文件。"))
+
     def _browse(self, edit, file):
         p = (QFileDialog.getOpenFileName(self, "", edit.text())[0] if file
              else QFileDialog.getExistingDirectory(self, "", edit.text()))
@@ -1929,8 +1954,7 @@ class SettingsDialog(FramedDialog):
                         nova_api_key=self.nova.text().strip(),
                         astap_path=self.astap.text().strip(), gaia_mag=self.gmag.value(),
                         out_dir=self.out.text().strip(), slide_interval=self.slide.value(),
-                        pixinsight_path=self.pi.text().strip(), tickwhale_base=self.tw.text().strip(),
-                        update_url=self.upd.text().strip(),
+                        pixinsight_path=self.pi.text().strip(),
                         confirm_delete=self.chk_confirm_del.isChecked(),
                         debayer=self.chk_debayer.isChecked(),
                         use_existing=self.chk_existing.isChecked())
@@ -2587,7 +2611,7 @@ class MainWindow(QMainWindow):
         self.btn_update = QToolButton()
         self.btn_update.setAutoRaise(True)
         self.btn_update.setText(t("检查更新"))
-        self.btn_update.setToolTip(t("从「设置 → 更新源」检查是否有新版本"))
+        self.btn_update.setToolTip(t("从服务器检查是否有新版本"))
         self.btn_update.setCursor(Qt.PointingHandCursor)
         self.btn_update.clicked.connect(lambda: self.check_updates(manual=True))
         sb.addPermanentWidget(self.btn_update)
@@ -2637,7 +2661,7 @@ class MainWindow(QMainWindow):
         self.act_original = act(t("原始大小"), self.view.one_to_one, "1")
         tb.addSeparator()
         tb.addWidget(QLabel(" %s " % t("拉伸")))
-        self.cmb_stretch = QComboBox()
+        self.cmb_stretch = ComboBox()
         for code, name in (("auto", t("自动")), ("awb", t("自动白平衡")), ("linked", t("联动")),
                            ("pedestal", t("去底色")), ("unlinked", t("分通道")), ("none", t("不拉伸"))):
             self.cmb_stretch.addItem(name, code)
@@ -2659,6 +2683,7 @@ class MainWindow(QMainWindow):
         self.addAction(self._del_action)
         tb.addSeparator()
         act(t("设置"), self.settings)
+        self.act_update = act(t("检查更新"), lambda: self.check_updates(manual=True))
         tb.addSeparator()
         tb.addAction(self._files_action)           # show/hide the left-hand folder list
         tb.addAction(self._bar_action)             # show/hide the bar of screening controls
@@ -3038,7 +3063,7 @@ class MainWindow(QMainWindow):
         row.setContentsMargins(0, 0, 0, 0)
         row.setSpacing(8)
         row.addWidget(QLabel(t("天体形状")))
-        self.cmb_shape = QComboBox()
+        self.cmb_shape = ComboBox()
         for text, key in (("轮廓线", "outline"), ("圆圈", "circle")):
             self.cmb_shape.addItem(t(text), key)
         self.cmb_shape.setCurrentIndex(max(0, self.cmb_shape.findData(self.cfg.get("shape_style", "outline"))))
@@ -3050,7 +3075,7 @@ class MainWindow(QMainWindow):
         # used. Only meaningful for a single-channel mosaic, so it stays disabled until one is on screen.
         self.lbl_bayer = QLabel(t("拜耳"))
         row.addWidget(self.lbl_bayer)
-        self.cmb_bayer = QComboBox()
+        self.cmb_bayer = ComboBox()
         self.cmb_bayer.addItem(t("自动"), "auto")         # the tooltip says it follows the header
         for key in debayer.PATTERNS:
             self.cmb_bayer.addItem(t(debayer.PATTERN_LABELS[key]), key)
