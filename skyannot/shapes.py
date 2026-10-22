@@ -6,7 +6,7 @@ import math
 
 import numpy as np
 
-from . import catalogs
+from . import catalogs, catalogue
 
 
 def _ellipse_world(ra, dec, maj_arcmin, min_arcmin, pa_deg, n=72):
@@ -117,10 +117,20 @@ def category(entry) -> str:
     return catalogue.catalogue_of(entry) or "other"
 
 
-def collect(P, include_others=True, min_size_px=6.0):
+def collect(P, include_others=True, min_size_px=6.0, cats=None):
     """Shapes of objects that touch the frame. Returns a list of dicts:
     {name, label, catalog, kind: outline|ellipse|circle, source, ra, dec, polygons: [[[x, y], ...], ...]}.
-    Pixel coordinates use PixInsight's convention."""
+    Pixel coordinates use PixInsight's convention.
+
+    `cats` is the tuple of enabled deep-sky catalogues, in precedence order (None or empty = all of them).
+    An object that several catalogues list is kept under the first *enabled* one, so switching Messier off
+    hands M31 to NGC and its label becomes NGC224; an object no enabled catalogue lists is left out. This is
+    the same rule annotate.dso_blocks applies to the text output.
+    """
+    on = tuple(cats) if cats else tuple(catalogue.KEYS)
+    entries = catalogue.unique(list(catalogs.openngc()) + list(catalogs.sharpless()))
+    assigned = catalogue.assign(entries, on)
+    by_name = {e.name: e for e in entries}
     out = []
     W, H = P.w, P.h
     diag = math.hypot(W, H)
@@ -200,9 +210,15 @@ def collect(P, include_others=True, min_size_px=6.0):
         else:
             entry.update(kind="point", source="OpenNGC" if cat != "Sharpless" else "Sharpless", polygons=[])
         out.append(entry)
+    kept = []
     for o in out:
         o.setdefault("catalog", "Outline")
-        o["category"] = category(o)         # the catalogue it is listed under (the switchable group)
+        entry = by_name.get(o["name"])
+        key = assigned.get(catalogue.key_of(entry)) if entry is not None else ""
+        if not key:
+            continue                        # no enabled catalogue lists it
+        o["category"] = key                 # the catalogue it is listed under (the switchable group)
+        o["label"] = _label_for(entry, key)
         o["type_group"] = object_type(o)    # what it is, which is what colours it
         if "x" not in o and o["polygons"]:
             xs = [p[0] for poly in o["polygons"] for p in poly]
@@ -215,7 +231,25 @@ def collect(P, include_others=True, min_size_px=6.0):
             r = float(np.max(np.hypot(pts[:, 0] - cx, pts[:, 1] - cy)))
             t = np.linspace(0, 2 * np.pi, 72)
             o["circle"] = [[[round(float(cx + r * np.cos(a)), 2), round(float(cy + r * np.sin(a)), 2)] for a in t]]
-    return out
+        kept.append(o)
+    return kept
+
+
+def _label_for(entry, key: str) -> str:
+    """The designation of the catalogue the object is listed under, plus its common name.
+
+    Under Messier a dual object keeps its NGC number in brackets (M31 (NGC224)); under NGC the Messier number
+    is not shown at all, because the user asked for the NGC catalogue, not for a Messier index.
+    """
+    if key == "m":
+        base = entry.messier or entry.name
+        ngcic = getattr(entry, "ngcic", "")
+        if ngcic and ngcic != base:
+            base = "%s (%s)" % (base, ngcic)
+    else:
+        base = entry.name
+    common = getattr(entry, "common", "")
+    return base + (" %s" % common if common else "")
 
 
 def display_polygons(entry, style="outline"):

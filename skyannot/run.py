@@ -87,11 +87,12 @@ def _reference_stars(wcs0, width, height, epoch, gaia_mag, max_rows, log):
     return ra, de, gm, rows, capped
 
 
-def local_overlay(img, wcs):
+def local_overlay(img, wcs, cats=None):
     """Deep-sky shapes, named stars and the RA/Dec grid for an image that already carries a solution
     (bundled catalogues only, no network)."""
     P = annotate.Projector(wcs, img.width, img.height)
-    return shapes.collect(P), annotate.named_local(P), grid.compute(wcs, img.width, img.height)
+    return (shapes.collect(P, cats=cats), annotate.named_local(P),
+            grid.compute(wcs, img.width, img.height))
 
 
 def process(path: str, opt: Options, log=print, progress=lambda p, msg: None) -> Result:
@@ -337,7 +338,7 @@ def solve(image_path: str, opt: Options, log=print, progress=lambda p, msg: None
             log("  note: " + n)
         res.named = next((b.rows for b in blocks if b.name == "NamedStars"), [])
         res.blocks = blocks
-        res.shapes = shapes.collect(P)
+        res.shapes = shapes.collect(P, cats=opt.dso_cats)
         res.grid = grid.compute(wcs, img.width, img.height)
         stats["objects"] = {b.name: len(b.rows) for b in blocks}
         log("  " + ", ".join("%s %d" % kv for kv in stats["objects"].items()))
