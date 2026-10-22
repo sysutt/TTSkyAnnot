@@ -1890,8 +1890,11 @@ class SettingsDialog(FramedDialog):
         bb.accepted.connect(self.accept)
         bb.rejected.connect(self.reject)
         # six groups are taller than a 768-pixel screen: scroll the form, keep the buttons in reach
+        # The column paints the card colour itself: a translucent one left the form see-through, so the
+        # picture behind the main window showed straight through the dialog.
         inner = QWidget()
-        inner.setAttribute(Qt.WA_TranslucentBackground)
+        inner.setObjectName("settingsInner")
+        inner.setStyleSheet("QWidget#settingsInner{background:%s}" % C["surface"])
         inner.setLayout(f)
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
