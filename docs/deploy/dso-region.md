@@ -19,7 +19,7 @@ Content-Type: application/json
 | `dec` | float | 中心赤纬，-90–90 度 |
 | `radius` | float | 半径，度；服务端建议钳制到 0.01–30 |
 | `limit` | int | 最多返回条数，建议钳制到 1–1000，默认 500 |
-| `catalogs` | array | 可选，只返回这些目录的对象：`lbn` `ldn` `vdb` `ced` `rcw`；缺省为全部 |
+| `catalogs` | array | 可选，只返回这些目录的对象：`lbn` `ldn` `vdb` `ced` `rcw`；缺省只查这五个目录（不传就不返回整张表） |
 
 ## 响应
 
@@ -28,12 +28,12 @@ Content-Type: application/json
 ```json
 {"errcode": 0, "result": {"total": 12, "list": [
   {"id": "LBN777", "ra": 60.5, "dec": 26.25, "type": "BN",
-   "size_major": 20.0, "size_minor": 18.0, "bmag": null,
+   "size_major": 20.0, "size_minor": 18.0, "angle": 0.0, "bmag": null,
    "name_zh": "LBN 777", "constellation_zh": "", "description_short": ""}
 ]}}
 ```
 
-- `size_major` / `size_minor`：**角分**，应用用它画尺寸圆圈；
+- `size_major` / `size_minor`：**角分**，应用用它画尺寸圆圈；`angle` 是位置角（度，北起向东），缺省 0；
 - `bmag` 缺省给 `null` 或 ≥90 的哨兵值（应用会把 ≥90 当作"没有星等"）；
 - 排序不要求，应用会按目录编号自行排序；
 - 没有对象时返回 `{"errcode":0,"result":{"list":[],"total":0}}` 即可。
@@ -89,6 +89,17 @@ def dso_region(d):
 - 只把**画面内**的对象画出来（中心点在画面内），视场外的会忽略；
 - 接口不存在或网络失败时静默跳过，不影响解析本身；
 - 切换星表卡片会按已返回的记录重新过滤，无需重新解析。
+
+## 已上线
+
+2026-10-24 已部署到 `app.tickwhale.com`（`WeatherController::dso_region`，提交 `3a58efb`），
+`dso_search` 也补上了 `angle` 字段。验收：
+
+```
+curl -s https://app.tickwhale.com/weather -H 'Content-Type: application/json' \
+  -d '{"a":"dso_region","d":{"ra":60.5,"dec":26.25,"radius":1.2}}'
+# -> total 4: LBN777, LDN1489, LDN1491, LBN775
+```
 
 ## 验收
 
