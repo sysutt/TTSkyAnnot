@@ -346,7 +346,8 @@ def solve(image_path: str, opt: Options, log=print, progress=lambda p, msg: None
         online_on = [k for k in (opt.dso_cats or ()) if k in catalogue.ONLINE]
         if online_on and opt.online_dso_base:
             from . import online_dso
-            recs = online_dso.region(opt.online_dso_base, ra0, de0, rad, catalogs=online_on)
+            recs = [r for r in online_dso.region(opt.online_dso_base, ra0, de0, rad, catalogs=online_on)
+                    if catalogue.catalogue_of(r) in catalogue.ONLINE]
             if recs:
                 blocks.extend(annotate.online_region_blocks(P, recs, opt.dso_cats))
                 res.online = recs
