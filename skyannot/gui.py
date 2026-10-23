@@ -3991,21 +3991,36 @@ class MainWindow(QMainWindow):
         self.ed_target.textEdited.connect(self._target_typed)
 
     def _remote_found(self, text, recs):
-        """Add what the server knows to the completer, keeping the bundled entries first."""
+        """Add what the server knows to the completer, keeping the bundled entries first.
+
+        The answer usually arrives after the user stopped typing, when the completion popup has already closed:
+        the list is shown again here, and the text that is in the field is resolved to the object's position on
+        the spot. Otherwise "LBN777" would be only a label to the solver, and an online-only catalogue name is
+        exactly what the bundled data cannot place.
+        """
         if text != self.ed_target.text().strip():
             return                                     # the field has moved on; this answer is stale
         added = []
         for rec in recs:
             label = tickwhale.label_for(rec)
-            if label in self._target_dso:
-                continue
             self._remote[label] = rec
-            self._target_dso[label] = rec
-            added.append(label)
+            if label not in self._target_dso:
+                self._target_dso[label] = rec
+                added.append(label)
+            for alias in (label, rec.get("name"), rec.get("common")):
+                if alias:
+                    self._target_by_key.setdefault(str(alias).replace(" ", "").lower(), rec)
         if added:
             self._target_model.setStringList(sorted(self._target_dso))
             self.logbox.appendPlainText("%s %d %s: %s" % (
                 t("在线星表补充"), len(added), t("个天体"), ", ".join(added[:4])))
+        resolved = self._resolve_typed()
+        if resolved:
+            ra, dec = self._target_radec
+            self.logbox.appendPlainText("%s %s: RA %.5f Dec %.5f  (%s)" % (
+                t("使用天体"), text, ra, dec, t("在线星表")))
+        if added and self.ed_target.hasFocus() and self.ed_target.text().strip():
+            self.ed_target.completer().complete()      # show the entries that just arrived
 
     def _ask_remote(self):
         """Ask the configured server about the current text, when one is configured."""
@@ -4032,12 +4047,26 @@ class MainWindow(QMainWindow):
 
         Typing "M33" is enough: it is looked up against every name each object carries (designation, Messier
         number, common name), so the position becomes the solve hint without having to pick from the list."""
-        d = self._target_dso.get(text.strip()) or self._target_by_key.get(text.replace(" ", "").strip().lower())
-        if d is not None:
-            self._target_radec = (d.ra, d.dec)
-        else:
-            self._target_radec = ()
+        self._resolve_typed()
         self._remote_timer.start()
+
+    def _resolve_typed(self) -> bool:
+        """Set the solve hint from the name in the field when it matches a known object; say whether it did.
+
+        The lookup covers the bundled catalogues and whatever the online catalogue has already answered with,
+        matched without spaces and without case, so "lbn 777" finds LBN777.
+        """
+        text = self.ed_target.text().strip()
+        key = text.replace(" ", "").lower()
+        d = self._target_by_key.get(key) or self._target_dso.get(text)
+        if isinstance(d, dict):                        # came from the online catalogue
+            self._target_radec = (float(d["ra"]), float(d["dec"]))
+            return True
+        if d is not None:
+            self._target_radec = (float(d.ra), float(d.dec))
+            return True
+        self._target_radec = ()
+        return False
 
     # ---- the centre-coordinate field ------------------------------------
     def _coord_entered(self):

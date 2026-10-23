@@ -2387,6 +2387,22 @@ def main():
           os.path.basename(win.current or "") == "frame.png", str(win.current))
 
     win.close()
+    # 4u1 ── an online-only catalogue name resolves to a position as soon as the answer arrives
+    rec = {"name": "LBN777", "ra": 60.5, "dec": 26.25, "common": "LBN 777", "type": "BN",
+           "maj": 20.0, "minr": 18.0, "source": "tickwhale"}
+    win.ed_target.setText("LBN777")
+    win._remote_found("LBN777", [rec])
+    check("an online-only name gives the solver a position", win._target_radec == (60.5, 26.25),
+          str(win._target_radec))
+    check("and the name is offered in the field",
+          any(s.startswith("LBN777") for s in win._target_model.stringList()),
+          str([s for s in win._target_model.stringList() if "LBN" in s][:3]))
+    win.ed_target.setText("lbn 777")
+    check("the match ignores case and spaces", win._resolve_typed() and win._target_radec == (60.5, 26.25),
+          str(win._target_radec))
+    win.ed_target.clear()
+    win._resolve_typed()
+
     # 4u2 ── the catalogue switches decide what is drawn and how it is labelled
     from skyannot import shapes                            # noqa: E402
     w2 = WCS(naxis=2)
