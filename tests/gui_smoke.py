@@ -2403,6 +2403,26 @@ def main():
     win.ed_target.clear()
     win._resolve_typed()
 
+    # 4u1b ── an object that lives only in the online database is annotated when it is the target
+    from skyannot import shapes                             # noqa: E402
+    w3 = WCS(naxis=2)
+    w3.wcs.ctype = ["RA---TAN", "DEC--TAN"]
+    w3.wcs.crval = [60.5, 26.25]                           # LBN777
+    w3.wcs.crpix = [250.0, 250.0]
+    w3.wcs.cd = [[-6.0e-4, 0.0], [0.0, 6.0e-4]]
+    proj3 = annotate.Projector(w3, 500, 500)
+    rec3 = {"name": "LBN777", "ra": 60.5, "dec": 26.25, "common": "LBN 777", "type": "BN",
+            "maj": 20.0, "minr": 18.0, "mag": None, "source": "tickwhale"}
+    tb = annotate.online_target_block(proj3, rec3, ("lbn",))
+    check("the online target gets a block of its catalogue",
+          tb is not None and tb.rows[0].name == "LBN777", tb.name if tb else "none")
+    check("and none when that catalogue is switched off",
+          annotate.online_target_block(proj3, rec3, ("m",)) is None, "")
+    os3 = shapes.online_shape(proj3, rec3, "lbn")
+    check("with a label and a size shape",
+          os3["category"] == "lbn" and os3["label"].startswith("LBN777") and bool(os3["polygons"]),
+          str(os3["label"]) if os3 else "none")
+
     # 4u2 ── the catalogue switches decide what is drawn and how it is labelled
     from skyannot import shapes                            # noqa: E402
     w2 = WCS(naxis=2)

@@ -146,6 +146,34 @@ def dso_blocks(P: Projector, cats=None):
     return blocks
 
 
+def online_target_block(P, rec, cats=None):
+    """The block for the object named in the target field when it comes from the online catalogue.
+
+    The online database is searched by designation, not by region, so it cannot fill a field on its own — but
+    the object the user named is usually the reason the frame exists (LBN777, say), and until now it was the
+    one object missing from the annotation. It gets the same treatment as a catalogue object: its position,
+    size, common name and type, in the block of its own catalogue.
+    """
+    if not rec:
+        return None
+    from . import catalogue as cat
+    key = cat.catalogue_of(rec)
+    on = set(cats) if cats else set(cat.KEYS)
+    if not key or key not in on:
+        return None
+    ra, de = float(rec["ra"]), float(rec["dec"])
+    x, y = P.xy([ra], [de])
+    if not np.isfinite(x[0]) or not P.inside(x[0], y[0]):
+        return None
+    maj = float(rec.get("maj") or 0.0) or None
+    row = Row(str(rec["name"]), ra, de, float(x[0]), float(y[0]),
+              [_fmt(rec.get("mag"), 2), _fmt(maj / 60.0 if maj else None, 2),
+               str(rec.get("common") or ""), "", "", ""],
+              rec.get("mag"), {"dso": rec})
+    return Block("dso:" + key, cat.NOTES[key],
+                 ["Magnitude", "Diameter", "Common name", "Messier", "PGC", "PGC2"], [row])
+
+
 def _f(rows, k):
     return np.array([_num(r.get(k)) if r.get(k) not in (None, "") else np.nan for r in rows], float)
 

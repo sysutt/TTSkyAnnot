@@ -630,6 +630,7 @@ class LoadWorker(QThread):
         self.debayer = debayer
         self.bayer_pattern = bayer_pattern
         self.dso_cats = dso_cats            # enabled deep-sky catalogues, for a frame with a header solution
+        self.target_object = None           # the online record the target name resolves to, if any
 
     def run(self):
         out = {"path": self.path}
@@ -653,7 +654,7 @@ class LoadWorker(QThread):
             if wcs is not None:
                 try:
                     out["shapes"], out["named"], out["grid"] = run.local_overlay(
-                        img, wcs, cats=self.dso_cats)
+                        img, wcs, cats=self.dso_cats, target=self.target_object)
                 except Exception:
                     out["shapes"], out["named"], out["grid"] = [], [], []
         except Exception as e:
@@ -2577,6 +2578,7 @@ class MainWindow(QMainWindow):
         self._file_guard = False    # suppress list signals while the list is rebuilt
         self._path = None           # file a right-click on a list row refers to
         self._target_radec = ()     # position of the object picked in the object-name field, if any
+        self._target_obj = None     # the online record behind that name, so the object can be annotated
         self._unsaved = set()       # paths solved but not written to disk yet
         self._loaded_path = None    # file whose picture is on screen (re-reading it cannot keep the view)
         self._view_state = None     # zoom/position captured by show_image, applied by _loaded
@@ -3367,6 +3369,7 @@ class MainWindow(QMainWindow):
                                       bool(self.cfg.get("debayer", True)),
                                       self.cfg.get("bayer_pattern", "auto"), self,
                                       dso_cats=self._groups_on())
+        ld.target_object = self._target_obj
         ld.done.connect(self._loaded)
         ld.start()
 
@@ -3508,6 +3511,11 @@ class MainWindow(QMainWindow):
                 try:
                     P = annotate.Projector(self.wcs, self.img.width, self.img.height)
                     fresh = shapes_mod.collect(P, cats=on)
+                    if self._target_obj:
+                        tkey = catalogue.catalogue_of(self._target_obj)
+                        extra = shapes_mod.online_shape(P, self._target_obj, tkey) if tkey else None
+                        if extra is not None:
+                            fresh.append(extra)
                     data = (fresh, data[1], data[2])
                     self.overlay_data[self.current] = data
                     res = self.results.get(self.current)
@@ -3793,6 +3801,7 @@ class MainWindow(QMainWindow):
                                                    self.ed_coord.text().strip()))
         coord = coord or self._target_radec
         opt = run.Options(target=self.ed_target.text().strip(), target_radec=coord,
+                          target_object=self._target_obj,
                           astap_path=self.cfg.get("astap_path", ""),
                           nova_key=self.cfg.get("nova_api_key", ""),
                           api_key=self.cfg.get("api_key", ""), gaia_mag=float(self.cfg.get("gaia_mag", 16)),
@@ -4035,9 +4044,11 @@ class MainWindow(QMainWindow):
             return
         if isinstance(d, dict):                        # came from the online catalogue
             self._target_radec = (d["ra"], d["dec"])
+            self._target_obj = d
             name, online = tickwhale.label_for(d), "  (%s)" % t("在线星表")
         else:
             self._target_radec = (d.ra, d.dec)
+            self._target_obj = None
             name, online = catalogs.label_for(d), ""
         self.logbox.appendPlainText("%s %s: RA %.5f Dec %.5f%s" % (
             t("使用天体"), name, self._target_radec[0], self._target_radec[1], online))
@@ -4061,11 +4072,14 @@ class MainWindow(QMainWindow):
         d = self._target_by_key.get(key) or self._target_dso.get(text)
         if isinstance(d, dict):                        # came from the online catalogue
             self._target_radec = (float(d["ra"]), float(d["dec"]))
+            self._target_obj = d
             return True
         if d is not None:
             self._target_radec = (float(d.ra), float(d.dec))
+            self._target_obj = None                    # a bundled object is annotated by its catalogue
             return True
         self._target_radec = ()
+        self._target_obj = None
         return False
 
     # ---- the centre-coordinate field ------------------------------------

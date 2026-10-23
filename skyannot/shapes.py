@@ -252,6 +252,34 @@ def _label_for(entry, key: str) -> str:
     return base + (" %s" % common if common else "")
 
 
+def online_shape(P, rec, category):
+    """A shape for a record that is not in the bundled data (the object named in the target field).
+
+    Without a position angle the catalogue size becomes a circle: an ellipse would have to invent a direction,
+    which is exactly what the bundled data avoids when PosAng is missing.
+    """
+    if not rec:
+        return None
+    ra, dec = float(rec["ra"]), float(rec["dec"])
+    x, y = P.xy(ra, dec)
+    if not np.isfinite(x[0]) or not P.inside(x[0], y[0]):
+        return None
+    name = str(rec["name"])
+    common = str(rec.get("common") or "").strip()
+    shape = {"name": name, "label": name + (" " + common if common and common != name else ""),
+             "catalog": "Online", "category": category, "type": rec.get("type") or "Neb",
+             "ra": ra, "dec": dec, "x": round(float(x[0]), 2), "y": round(float(y[0]), 2),
+             "source": "tickwhale", "kind": "point", "polygons": []}
+    maj = float(rec.get("maj") or 0.0)
+    if maj > 0:
+        er, ed = _ellipse_world(ra, dec, maj, maj, 0.0)
+        ex, ey = P.xy(er, ed)
+        shape["polygons"] = [[[round(float(a), 2), round(float(b), 2)] for a, b in zip(ex, ey)]]
+        shape["kind"] = "circle"
+    shape["type_group"] = object_type(shape)
+    return shape
+
+
 def display_polygons(entry, style="outline"):
     """(polygons, closed) to draw for an object. style "outline": OpenNGC/Stellarium outlines where they
     exist; "circle": the catalogue size instead (circles, ellipses for elongated objects)."""

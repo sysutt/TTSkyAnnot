@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from . import annotate, grid, imageio, refine, render, shapes, starfind, vizier, wcsio
+from . import annotate, catalogue, grid, imageio, refine, render, shapes, starfind, vizier, wcsio
 # the solver module is bound as `solver`: this file also defines a public function called solve(), and the two
 # names collided — inside solve() the name referred to the function, so every solver lookup died with an
 # AttributeError that the loop recorded as "ttastro/nova failed" and quietly moved on from
@@ -21,6 +21,7 @@ from . import solve as solver
 class Options:
     target: str = ""                 # optional hint: object name, e.g. "M31"
     target_radec: tuple = ()         # its catalogued position, when the user picked one from the database
+    target_object: dict = None       # the online record behind the target (name, position, size, type)
     solvers: tuple = ("ttastro", "astap", "nova")
     astap_path: str = ""
     nova_key: str = ""
@@ -87,12 +88,17 @@ def _reference_stars(wcs0, width, height, epoch, gaia_mag, max_rows, log):
     return ra, de, gm, rows, capped
 
 
-def local_overlay(img, wcs, cats=None):
+def local_overlay(img, wcs, cats=None, target=None):
     """Deep-sky shapes, named stars and the RA/Dec grid for an image that already carries a solution
     (bundled catalogues only, no network)."""
     P = annotate.Projector(wcs, img.width, img.height)
-    return (shapes.collect(P, cats=cats), annotate.named_local(P),
-            grid.compute(wcs, img.width, img.height))
+    found = shapes.collect(P, cats=cats)
+    if target:
+        key = catalogue.catalogue_of(target)
+        extra = shapes.online_shape(P, target, key) if key else None
+        if extra is not None:
+            found.append(extra)
+    return (found, annotate.named_local(P), grid.compute(wcs, img.width, img.height))
 
 
 def process(path: str, opt: Options, log=print, progress=lambda p, msg: None) -> Result:
@@ -333,12 +339,22 @@ def solve(image_path: str, opt: Options, log=print, progress=lambda p, msg: None
             notes.append("Gaia DR3 limited to the brightest %d stars of this wide field (down to G %.2f)"
                          % (opt.gaia_max_rows, gaia_capped))
         blocks += sblocks
+        if opt.target_object:
+            extra = annotate.online_target_block(P, opt.target_object, opt.dso_cats)
+            if extra is not None:
+                blocks.append(extra)
+                log("  %s %s" % (extra.name, str(opt.target_object.get("name"))))
         res.notes = notes
         for n in notes:
             log("  note: " + n)
         res.named = next((b.rows for b in blocks if b.name == "NamedStars"), [])
         res.blocks = blocks
         res.shapes = shapes.collect(P, cats=opt.dso_cats)
+        if opt.target_object:
+            key = catalogue.catalogue_of(opt.target_object)
+            extra = shapes.online_shape(P, opt.target_object, key) if key else None
+            if extra is not None:
+                res.shapes.append(extra)
         res.grid = grid.compute(wcs, img.width, img.height)
         stats["objects"] = {b.name: len(b.rows) for b in blocks}
         log("  " + ", ".join("%s %d" % kv for kv in stats["objects"].items()))
