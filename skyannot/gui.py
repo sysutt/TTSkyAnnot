@@ -3511,6 +3511,13 @@ class MainWindow(QMainWindow):
                 try:
                     P = annotate.Projector(self.wcs, self.img.width, self.img.height)
                     fresh = shapes_mod.collect(P, cats=on)
+                    res_now = self.results.get(self.current)
+                    for rec in (getattr(res_now, "online", None) or []):
+                        okey = catalogue.catalogue_of(rec)
+                        if okey in on:
+                            extra = shapes_mod.online_shape(P, rec, okey)
+                            if extra is not None:
+                                fresh.append(extra)
                     if self._target_obj:
                         tkey = catalogue.catalogue_of(self._target_obj)
                         extra = shapes_mod.online_shape(P, self._target_obj, tkey) if tkey else None
@@ -3802,6 +3809,7 @@ class MainWindow(QMainWindow):
         coord = coord or self._target_radec
         opt = run.Options(target=self.ed_target.text().strip(), target_radec=coord,
                           target_object=self._target_obj,
+                          tickwhale_base=self.cfg.get("tickwhale_base", ""),
                           astap_path=self.cfg.get("astap_path", ""),
                           nova_key=self.cfg.get("nova_api_key", ""),
                           api_key=self.cfg.get("api_key", ""), gaia_mag=float(self.cfg.get("gaia_mag", 16)),

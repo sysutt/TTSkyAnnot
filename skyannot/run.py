@@ -22,6 +22,7 @@ class Options:
     target: str = ""                 # optional hint: object name, e.g. "M31"
     target_radec: tuple = ()         # its catalogued position, when the user picked one from the database
     target_object: dict = None       # the online record behind the target (name, position, size, type)
+    tickwhale_base: str = ""         # the online database, for the region query that fills a field
     solvers: tuple = ("ttastro", "astap", "nova")
     astap_path: str = ""
     nova_key: str = ""
@@ -59,6 +60,7 @@ class Result:
     grid: list = field(default_factory=list)
     notes: list = field(default_factory=list)
     blocks: list = field(default_factory=list)   # catalogue blocks: what the text file is written from
+    online: list = field(default_factory=list)   # online records inside the field (region query)
     saved: bool = False                          # the outputs were written to disk
 
 
@@ -339,6 +341,16 @@ def solve(image_path: str, opt: Options, log=print, progress=lambda p, msg: None
             notes.append("Gaia DR3 limited to the brightest %d stars of this wide field (down to G %.2f)"
                          % (opt.gaia_max_rows, gaia_capped))
         blocks += sblocks
+        # The online catalogues are filled by a cone query around the solved centre: the frame's own geometry is
+        # the best query there is, and the radius covers the corners, so nothing in the picture is missed.
+        online_on = [k for k in (opt.dso_cats or ()) if k in catalogue.ONLINE]
+        if online_on and opt.tickwhale_base:
+            from . import tickwhale
+            recs = tickwhale.region(opt.tickwhale_base, ra0, de0, rad, catalogs=online_on)
+            if recs:
+                blocks.extend(annotate.online_region_blocks(P, recs, opt.dso_cats))
+                res.online = recs
+                log("  online: %d objects inside the field" % len(recs))
         if opt.target_object:
             extra = annotate.online_target_block(P, opt.target_object, opt.dso_cats)
             if extra is not None:
@@ -350,6 +362,11 @@ def solve(image_path: str, opt: Options, log=print, progress=lambda p, msg: None
         res.named = next((b.rows for b in blocks if b.name == "NamedStars"), [])
         res.blocks = blocks
         res.shapes = shapes.collect(P, cats=opt.dso_cats)
+        for rec in res.online:
+            key = catalogue.catalogue_of(rec)
+            sh = shapes.online_shape(P, rec, key) if key else None
+            if sh is not None:
+                res.shapes.append(sh)
         if opt.target_object:
             key = catalogue.catalogue_of(opt.target_object)
             extra = shapes.online_shape(P, opt.target_object, key) if key else None

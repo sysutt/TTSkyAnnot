@@ -2423,6 +2423,30 @@ def main():
           os3["category"] == "lbn" and os3["label"].startswith("LBN777") and bool(os3["polygons"]),
           str(os3["label"]) if os3 else "none")
 
+    # 4u1c ── the online region query: the cone it asks for, and many records becoming one block
+    from skyannot import tickwhale                          # noqa: E402
+    asked = {}
+    real_ask = tickwhale._ask
+
+    def fake_ask(url, payload, timeout, action="dso_search"):
+        asked["action"], asked["payload"] = action, payload
+        return [dict(rec3), dict(rec3, name="LBN778", ra=60.6)]
+
+    try:
+        tickwhale._ask = fake_ask
+        recs = tickwhale.region("https://x.test", 60.5, 26.25, 0.8, catalogs=("lbn",))
+    finally:
+        tickwhale._ask = real_ask
+    check("the region query asks for a cone",
+          asked["action"] == "dso_region" and asked["payload"]["radius"] == 0.8
+          and asked["payload"]["catalogs"] == ["lbn"], str(asked["payload"]))
+    check("and keeps what the server returns", len(recs) == 2, str(len(recs)))
+    rb = annotate.online_region_blocks(proj3, recs, ("lbn",))
+    check("the records form one block per catalogue", len(rb) == 1 and len(rb[0].rows) == 2,
+          "%d blocks" % len(rb))
+    check("and are gone when that catalogue is switched off",
+          annotate.online_region_blocks(proj3, recs, ("m",)) == [], "")
+
     # 4u2 ── the catalogue switches decide what is drawn and how it is labelled
     from skyannot import shapes                            # noqa: E402
     w2 = WCS(naxis=2)

@@ -116,8 +116,29 @@ def search(text: str, base: str = "", timeout: float = 6.0, limit: int = 12) -> 
     return out[:limit]
 
 
-def _ask(url: str, payload: dict, timeout: float) -> list:
-    body = json.dumps({"a": "dso_search", "d": payload}).encode("utf-8")
+def region(base: str = "", ra: float = 0.0, dec: float = 0.0, radius: float = 1.0,
+           catalogs=None, limit: int = 500, timeout: float = 8.0) -> list:
+    """Every database object inside a cone: centre, radius in degrees, optionally catalogue keys.
+
+    This is the action the annotation uses after a solve, so a field can be filled with the online catalogues
+    the way the bundled ones are filled. A server that predates the action answers with an error, `_ask` turns
+    that into an empty list and the annotation simply has nothing extra to draw.
+    """
+    url = (base or DEFAULT_BASE).rstrip("/") + "/weather"
+    payload = {"ra": round(float(ra), 6), "dec": round(float(dec), 6),
+               "radius": round(float(radius), 6), "limit": int(limit)}
+    if catalogs:
+        payload["catalogs"] = [str(c) for c in catalogs]
+    out, seen = [], set()
+    for rec in _ask(url, payload, timeout, action="dso_region"):
+        if rec["name"] not in seen:
+            seen.add(rec["name"])
+            out.append(rec)
+    return out
+
+
+def _ask(url: str, payload: dict, timeout: float, action: str = "dso_search") -> list:
+    body = json.dumps({"a": action, "d": payload}).encode("utf-8")
     req = urllib.request.Request(url, data=body, method="POST",
                                  headers={"Content-Type": "application/json"})
     try:

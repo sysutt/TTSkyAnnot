@@ -174,6 +174,34 @@ def online_target_block(P, rec, cats=None):
                  ["Magnitude", "Diameter", "Common name", "Messier", "PGC", "PGC2"], [row])
 
 
+def online_region_blocks(P, recs, cats=None):
+    """Blocks for the online objects inside the field, one per catalogue, rows in catalogue order.
+
+    The region query returns records in the same shape the single-object lookup does, so each one is turned
+    into a row by the same code; grouping follows the catalogue the designation belongs to, exactly like the
+    bundled blocks.
+    """
+    from . import catalogue as cat
+    on = set(cats) if cats else set(cat.KEYS)
+    groups = {}
+    for rec in recs or []:
+        key = cat.catalogue_of(rec)
+        if not key or key not in on:
+            continue
+        block = online_target_block(P, rec, on)
+        if block is None:
+            continue
+        groups.setdefault(key, []).extend(block.rows)
+    out = []
+    for key in cat.KEYS:
+        rows = groups.get(key)
+        if rows:
+            rows.sort(key=lambda r: cat.sort_key(r.extra["dso"], key))
+            out.append(Block("dso:" + key, cat.NOTES[key],
+                             ["Magnitude", "Diameter", "Common name", "Messier", "PGC", "PGC2"], rows))
+    return out
+
+
 def _f(rows, k):
     return np.array([_num(r.get(k)) if r.get(k) not in (None, "") else np.nan for r in rows], float)
 
