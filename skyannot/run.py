@@ -99,7 +99,8 @@ def _reference_stars(wcs0, width, height, epoch, gaia_mag, max_rows, log):
     rows = []
     cone = solver.fetch_stars(ra0, de0, rad, mag=min(16.0, lim), limit=cap, log=log)
     if cone:
-        rows = [{"RA_ICRS": "%.6f" % a, "DE_ICRS": "%.6f" % d, "Gmag": "%.3f" % m, "pmRA": "0", "pmDE": "0"}
+        rows = [{"RA_ICRS": "%.6f" % a, "DE_ICRS": "%.6f" % d, "Gmag": "%.3f" % m, "pmRA": "0", "pmDE": "0",
+                 "BPmag": "", "RPmag": "", "Plx": "", "Source": ""}
                 for a, d, m in cone]
         log("  reference stars: %d from the online star index" % len(rows))
     else:
