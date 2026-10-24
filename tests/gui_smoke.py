@@ -2496,6 +2496,30 @@ def main():
         tickwhale.search = real_search
     check("an online-only name in the folder is recognised",
           bool(g2) and g2[0] == "LBN777" and g2[2] is not None, str(g2[:2]))
+    # the service answers cd in radians (Nebula3D blind-solve spec); the client must build the same WCS
+    class _FakeResp:
+        status_code = 200
+
+        def json(self):
+            return {"ok": True, "ra": 61.0, "dec": 26.5,
+                    "cd": [[-5.95e-8, 2.1e-9], [1.9e-9, -5.94e-8]],
+                    "cd_deg": [[-3.41e-6, 1.2e-7], [1.1e-7, -3.40e-6]],
+                    "matched": 87, "nstars": 200, "rms_arcsec": 0.42, "parity": 1, "name": "HINT"}
+
+    import requests as _rq                                    # noqa: E402
+    from skyannot import solve as solve_mod                   # noqa: E402
+    real_post = _rq.post
+    _rq.post = lambda *a, **k: _FakeResp()
+    try:
+        w_api, info = solve_mod.solve_ttastro([[i * 10.0, i * 8.0, 100.0 - i] for i in range(20)],
+                                          3672, 5648, api_key="k")
+    finally:
+        _rq.post = real_post
+    check("the service's radians cd becomes a FITS WCS",
+          abs(w_api.wcs.cd[0][0] + 3.41e-6) < 1e-9, str(w_api.wcs.cd[0][0]))
+    check("and the name and matched count are read",
+          info.get("name") == "HINT" and info.get("matched") == 87, str(info.get("name")))
+
     # the refinement takes its reference stars from the online star cone; VizieR is only the fallback
     from skyannot import solve as solver_mod                   # noqa: E402
     real_fetch = solver_mod.fetch_stars

@@ -93,10 +93,18 @@ def solve_ttastro(stars, width, height, hint=None, log=print, timeout=60.0, max_
             delay = min(delay * 1.6, 20.0)
             continue
         raise SolveError(d.get("reason") or d.get("code") or "not solved")
+    # The service answers cd in radians around the image centre (Nebula3D blind-solve spec); FITS wants
+    # degrees. cd_deg is sent as well, so an engine that still answers degrees keeps working.
+    cd = d.get("cd_deg")
+    if not cd:
+        import math
+        cd = [[float(v) * 180.0 / math.pi for v in row] for row in (d.get("cd") or [])]
     # The reference point is the image centre in index coordinates (W/2, H/2) -> FITS adds 1.
-    w = _tan_wcs((d["ra"], d["dec"]), (width / 2.0 + 1.0, height / 2.0 + 1.0), d["cd"])
-    info = {"solver": "ttastro", "matched": d.get("matched"), "nstars": d.get("nstars"),
-            "rms_arcsec": d.get("rms_arcsec"), "objects": d.get("objects") or []}
+    w = _tan_wcs((d["ra"], d["dec"]), (width / 2.0 + 1.0, height / 2.0 + 1.0), cd)
+    name = d.get("name") or (d.get("matched") if isinstance(d.get("matched"), str) else "")
+    info = {"solver": "ttastro", "name": name, "matched": d.get("matched"), "nstars": d.get("nstars"),
+            "rms_arcsec": d.get("rms_arcsec"), "objects": d.get("objects") or [],
+            "parity": d.get("parity"), "elapsed_ms": d.get("elapsed_ms")}
     return w, info
 
 
