@@ -2,15 +2,17 @@
 from __future__ import annotations
 
 import datetime
+import functools
 import json
 import math
 import os
+import re
 import time
 from dataclasses import dataclass, field
 
 import numpy as np
 
-from . import annotate, catalogue, grid, imageio, refine, render, shapes, starfind, vizier, wcsio
+from . import annotate, catalogs, catalogue, grid, imageio, refine, render, shapes, starfind, vizier, wcsio
 # the solver module is bound as `solver`: this file also defines a public function called solve(), and the two
 # names collided — inside solve() the name referred to the function, so every solver lookup died with an
 # AttributeError that the loop recorded as "ttastro/nova failed" and quietly moved on from
@@ -22,6 +24,7 @@ class Options:
     target: str = ""                 # optional hint: object name, e.g. "M31"
     target_radec: tuple = ()         # its catalogued position, when the user picked one from the database
     target_object: dict = None       # the online record behind the target (name, position, size, type)
+    guess_target_from_name: bool = True   # read the target out of the file/folder name when there is no hint
     tickwhale_base: str = ""         # the online database, for the region query that fills a field
     solvers: tuple = ("ttastro", "astap", "nova")
     astap_path: str = ""
@@ -106,6 +109,79 @@ def online_records_cone(ra, dec, radius, cats, tickwhale_base):
 def online_records(P, cats, tickwhale_base):
     """The online objects inside the field of a projector (see online_records_cone)."""
     return online_records_cone(P.ra0, P.de0, P.rad, cats, tickwhale_base)
+
+
+_DSO_TOKEN = re.compile(r"(?<![A-Za-z])(M|NGC|IC|SH2|SH-|LBN|LDN|VDB|CED|RCW)\s*-?\s*(\d{1,4}[A-Za-z]?)(?![0-9A-Za-z])",
+                         re.IGNORECASE)
+
+
+def _normalise_token(prefix: str, number: str) -> str:
+    prefix = prefix.upper()
+    number = number.upper()
+    if prefix in ("SH2", "SH-"):
+        return "SH2-" + number
+    if prefix == "M":
+        return "M" + number
+    return prefix + number
+
+
+@functools.lru_cache(maxsize=1)
+def _local_aliases():
+    """Every name a bundled object has, lower-cased and without spaces, for exact lookups."""
+    out = {}
+    for keys, d in catalogs.searchable():
+        for alias in str(keys).split("|"):
+            alias = alias.strip()
+            if alias:
+                out.setdefault(alias.replace(" ", "").lower(), d)
+    return out
+
+
+def guess_target(path: str, tickwhale_base: str = "") -> tuple:
+    """The object named by a file or its folder: (name, (ra, dec), online record or None), or ().
+
+    Astro files are named after what they show — "Light_M 31_300s...", "261007-261020_2600mm_LBN777" — and a
+    solve with a position hint takes seconds where a blind one of a wide field can time out. Only exact
+    catalogue designations are accepted, checked against the bundled catalogues first and then the online one;
+    a name that resolves to nothing is ignored, so the solve stays blind instead of being pointed at the wrong
+    object.
+    """
+    names = []
+    stem = os.path.splitext(os.path.basename(path))[0]
+    names.append(stem)
+    folder = os.path.dirname(os.path.abspath(path))
+    for _ in range(2):                                 # the folder and its parent: targets are often there
+        if not folder:
+            break
+        names.append(os.path.basename(folder))
+        parent = os.path.dirname(folder)
+        if parent == folder:
+            break
+        folder = parent
+    candidates = []
+    for text in names:
+        for prefix, number in _DSO_TOKEN.findall(text or ""):
+            token = _normalise_token(prefix, number)
+            if token not in candidates:
+                candidates.append(token)
+    if not candidates:
+        return ()
+    local = _local_aliases()
+    for token in candidates:
+        d = local.get(token.replace(" ", "").lower())
+        if d is not None:
+            return (catalogs.label_for(d), (float(d.ra), float(d.dec)), None)
+    if tickwhale_base:
+        from . import tickwhale
+        for token in candidates[:3]:
+            try:
+                recs = tickwhale.search(token, tickwhale_base, limit=3)
+            except Exception:
+                recs = []
+            for rec in recs:
+                if str(rec.get("name", "")).upper().replace(" ", "") == token:
+                    return (rec["name"], (float(rec["ra"]), float(rec["dec"])), rec)
+    return ()
 
 
 def local_overlay_with_online(img, wcs, cats=None, target=None, tickwhale_base=""):
@@ -285,6 +361,16 @@ def solve(image_path: str, opt: Options, log=print, progress=lambda p, msg: None
             # coordinates are the target it was sent to, not necessarily where the frame is centred, and the
             # online solver searches around this hint
             hint["ra"], hint["dec"] = float(opt.target_radec[0]), float(opt.target_radec[1])
+        elif opt.guess_target_from_name and hint.get("ra") is None:
+            # no position anywhere — but the file may well be named after what it shows
+            guess = guess_target(image_path, opt.tickwhale_base)
+            if guess:
+                gname, (gra, gdec), grep = guess
+                hint["ra"], hint["dec"] = gra, gdec
+                hint.setdefault("target", gname)
+                log("  target from the file name: %s (RA %.3f Dec %.3f)" % (gname, gra, gdec))
+                if grep is not None and not opt.target_object:
+                    opt.target_object = grep
         epoch = _epoch(hint.get("date"), image_path)
         log("%s: %d x %d %s%s" % (os.path.basename(image_path), img.width, img.height, img.fmt.upper(),
                                   ", linear data (auto-stretched)" if img.linear else ""))
@@ -371,37 +457,37 @@ def solve(image_path: str, opt: Options, log=print, progress=lambda p, msg: None
                          % (opt.gaia_max_rows, gaia_capped))
         blocks += sblocks
         # The online catalogues are filled by a cone query around the solved centre: the frame's own geometry is
-        # the best query there is, and the radius covers the corners, so nothing in the picture is missed.
+        # the best query there is, and the radius covers the corners, so nothing in the picture is missed. The
+        # object named in the target field is added when the region query does not already return it (it may
+        # sit just outside the radius, or the database may not have answered).
         online_on = [k for k in (opt.dso_cats or ()) if k in catalogue.ONLINE]
+        recs = []
         if online_on and opt.tickwhale_base:
             from . import tickwhale
             recs = [r for r in tickwhale.region(opt.tickwhale_base, ra0, de0, rad, catalogs=online_on)
                     if catalogue.catalogue_of(r) in catalogue.ONLINE]
-            if recs:
-                blocks.extend(annotate.online_region_blocks(P, recs, opt.dso_cats))
-                res.online = recs
-                log("  online: %d objects inside the field" % len(recs))
-        if opt.target_object:
-            extra = annotate.online_target_block(P, opt.target_object, opt.dso_cats)
-            if extra is not None:
-                blocks.append(extra)
-                log("  %s %s" % (extra.name, str(opt.target_object.get("name"))))
+        target_rec = opt.target_object
+        if target_rec and catalogue.catalogue_of(target_rec) in catalogue.ONLINE:
+            if not any(r.get("name") == target_rec.get("name") for r in recs):
+                recs.append(target_rec)
+        if recs:
+            res.online = recs
+            blocks.extend(annotate.online_region_blocks(P, recs, opt.dso_cats))
+            log("  online: %d objects inside the field" % len(recs))
         res.notes = notes
         for n in notes:
             log("  note: " + n)
         res.named = next((b.rows for b in blocks if b.name == "NamedStars"), [])
         res.blocks = blocks
         res.shapes = shapes.collect(P, cats=opt.dso_cats)
+        on_set = set(opt.dso_cats or catalogue.KEYS)
         for rec in res.online:
             key = catalogue.catalogue_of(rec)
+            if key not in on_set:
+                continue
             sh = shapes.online_shape(P, rec, key) if key else None
             if sh is not None:
                 res.shapes.append(sh)
-        if opt.target_object:
-            key = catalogue.catalogue_of(opt.target_object)
-            extra = shapes.online_shape(P, opt.target_object, key) if key else None
-            if extra is not None:
-                res.shapes.append(extra)
         res.grid = grid.compute(wcs, img.width, img.height)
         stats["objects"] = {b.name: len(b.rows) for b in blocks}
         log("  " + ", ".join("%s %d" % kv for kv in stats["objects"].items()))

@@ -2467,6 +2467,26 @@ def main():
     check("and the records are kept for a later refilter", [r["name"] for r in online2] == ["LBN777"],
           str([r["name"] for r in online2]))
 
+    # 4u1e ── a file named after its target gives the solver a position without any typing
+    g = run.guess_target(r"C:\x\Light_M 31_300.0s_Bin1_294MC.fits")
+    check("a Messier name in the file name is recognised",
+          bool(g) and g[0].startswith("M31") and abs(g[1][0] - 10.6848) < 0.05, str(g[:2]))
+    real_search = tickwhale.search
+
+    def fake_search(text, base="", timeout=6.0, limit=12):
+        return [dict(rec3)] if text.upper() == "LBN777" else []
+
+    try:
+        tickwhale.search = fake_search
+        g2 = run.guess_target(os.path.join("C:\\x", "261007-261020_2600mm_LBN777", "Image19.jpg"),
+                              "https://x.test")
+    finally:
+        tickwhale.search = real_search
+    check("an online-only name in the folder is recognised",
+          bool(g2) and g2[0] == "LBN777" and g2[2] is not None, str(g2[:2]))
+    check("a name with no catalogue designation stays blind",
+          run.guess_target(r"C:\x\Image19.jpg", "") == (), str(run.guess_target(r"C:\x\Image19.jpg", "")))
+
     # 4u2 ── the catalogue switches decide what is drawn and how it is labelled
     from skyannot import shapes                            # noqa: E402
     w2 = WCS(naxis=2)
