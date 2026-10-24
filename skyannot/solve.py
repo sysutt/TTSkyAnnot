@@ -30,7 +30,8 @@ TTASTRO_IMAGE_URL = "https://ttastro.com/api/i/solve_image"
 TTASTRO_RESULT_URL = "https://ttastro.com/api/i/solve_result"
 
 
-def remote_image(display_rgb, api_key="", timeout=540.0, log=print):
+def remote_image(display_rgb, api_key="", timeout=540.0, log=print, pixscale=None,
+                 image_url=None, result_url=None):
     """Solve a frame the local solvers could not: upload an 800 px thumbnail to our own service.
 
     The service extracts the stars itself and races its local astrometry.net against nova.astrometry.net,
@@ -53,17 +54,44 @@ def remote_image(display_rgb, api_key="", timeout=540.0, log=print):
     if (api_key or "").strip():
         headers["X-API-Key"] = api_key.strip()
     log("  remote: uploading a %dx%d thumbnail" % im.size)
-    r = requests.post(TTASTRO_IMAGE_URL, json={"image": b64, "w": im.size[0], "h": im.size[1],
-                                               "cpu_s": 120}, headers=headers, timeout=60)
-    d = r.json()
+    thumb_scale = (float(pixscale) / k) if pixscale else None
+    body = {"image": b64, "w": im.size[0], "h": im.size[1], "cpu_s": 120}
+    if thumb_scale:
+        body["pixscale"] = round(thumb_scale, 3)
+    url = (image_url or TTASTRO_IMAGE_URL)
+    res_url = (result_url or TTASTRO_RESULT_URL)
+    d = None
+    for attempt in range(4):
+        r = requests.post(url, json=body, headers=headers, timeout=60)
+        d = r.json()
+        if d.get("ok"):
+            break
+        if d.get("code") == "busy" and attempt < 3:
+            wait = float(d.get("retry_after") or 20)
+            log("  remote: busy, retrying in %.0f s" % wait)
+            _time.sleep(wait)
+            continue
+        raise SolveError(d.get("reason") or d.get("code") or "remote image solve failed")
+    if not d or not d.get("ok"):
+        raise SolveError("remote image solve failed")
     if not d.get("ok"):
         raise SolveError(d.get("reason") or d.get("code") or "remote image solve failed")
     job = d.get("job")
     t0 = _time.time()
+    last_log = 0.0
+    busy_left = 3
     while _time.time() - t0 < timeout:
         _time.sleep(3.0)
-        q = requests.get(TTASTRO_RESULT_URL, params={"job": job}, headers=headers, timeout=30).json()
+        q = requests.get(res_url, params={"job": job}, headers=headers, timeout=30).json()
         if q.get("status") == "running":
+            waited = _time.time() - t0
+            if waited - last_log >= 15.0:
+                last_log = waited
+                log("  remote: still solving, %.0f s" % waited)
+            continue
+        if not q.get("ok") and q.get("code") == "busy" and busy_left:
+            busy_left -= 1
+            _time.sleep(float(q.get("retry_after") or 20))
             continue
         if not q.get("ok"):
             raise SolveError(q.get("reason") or q.get("code") or "remote image solve failed")
@@ -75,7 +103,7 @@ def remote_image(display_rgb, api_key="", timeout=540.0, log=print):
         crpix = ((cw / 2.0 + 1.0 - 0.5) / k + 0.5, (ch / 2.0 + 1.0 - 0.5) / k + 0.5)
         cd_full = [[float(v) * k for v in row] for row in cd]
         wcs = _tan_wcs((q["ra"], q["dec"]), crpix, cd_full)
-        log("  remote: %s solved in %.0f s" % (q.get("name") or "nova", _time.time() - t0))
+        log("  remote: 识别完成，用时 %.0f 秒" % (_time.time() - t0))
         info = {"solver": q.get("name") or "remote", "remote": True, "elo_ms": q.get("elapsed_ms")}
         return wcs, info
     raise SolveError("remote image solve timed out")
