@@ -654,9 +654,8 @@ class LoadWorker(QThread):
             out["wcs"] = wcs
             if wcs is not None:
                 try:
-                    out["shapes"], out["named"], out["grid"], out["online"] = run.local_overlay_with_online(
-                        img, wcs, cats=self.dso_cats, target=self.target_object,
-                        tickwhale_base=self.tickwhale_base)
+                    out["shapes"], out["named"], out["grid"] = run.local_overlay(
+                        img, wcs, cats=self.dso_cats, target=self.target_object)
                 except Exception:
                     out["shapes"], out["named"], out["grid"] = [], [], []
         except Exception as e:
@@ -1987,6 +1986,30 @@ class SettingsDialog(FramedDialog):
                                 t("设置文件写入失败：%s\n配色等选项可能在下次启动时不生效。") % config._path())
 
 
+class RegionLookup(QThread):
+    """Ask the online database for the objects inside a solved field, off the GUI thread.
+
+    A frame whose header already carries a solution never goes through solve(), so this is the only way its
+    online catalogues can be annotated. It runs after the picture is on screen: a slow or dead database costs
+    a moment of labels, not a moment of viewing.
+    """
+
+    found = pyqtSignal(str, object, list)         # path, cache key, records
+
+    def __init__(self, path, key, ra, dec, radius, cats, base, parent=None):
+        super().__init__(parent)
+        self.path, self.key = path, key
+        self.ra, self.dec, self.radius = ra, dec, radius
+        self.cats, self.base = cats, base
+
+    def run(self):
+        try:
+            recs = run.online_records_cone(self.ra, self.dec, self.radius, self.cats, self.base)
+        except Exception:
+            recs = []
+        self.found.emit(self.path, self.key, recs)
+
+
 class SaveDialog(FramedDialog):
     """Asked before anything is written: solving on its own produces no files, and this is where the user
     says what should land in the folder. Every output can be switched off here, so a solve can be looked at
@@ -2572,6 +2595,9 @@ class MainWindow(QMainWindow):
         self.results = {}           # path -> Result
         self.overlay_data = {}      # path -> (shapes, named, grid)
         self.overlay_online = {}    # path -> online records the region query returned
+        self._region_cache = {}     # (ra, dec, radius) -> records, so a folder of frames asks once
+        self._region_lookup = None
+        self._region_next = None
         self._key_offer_shown = False   # the "where do I get a key" box is offered once per session
         self._folder = None         # folder the left-hand list is showing
         self._folder_dirty = False  # a file was removed or moved: rebuild the list even for the same folder
@@ -3401,6 +3427,7 @@ class MainWindow(QMainWindow):
             state = None
         self._view_state = None
         self._loaded_path = out["path"]
+        self._request_online(out)
         self.view.set_image(out["qimage"], view=state)
         self._refresh_overlay()
         self._update_bayer_control()
@@ -3505,6 +3532,54 @@ class MainWindow(QMainWindow):
             # empty picture reads as a broken switch rather than as "this frame has not been solved yet"
             self.statusBar().showMessage(
                 t("这张图还没有解析：标注来自解析结果，先用「解析并标注」把它解出来"), 8000)
+
+    def _request_online(self, out):
+        """Ask for the online objects of this frame's field, unless a result or the cache already has them."""
+        path, wcs = out["path"], out.get("wcs")
+        if wcs is None:
+            return
+        res = self.results.get(path)
+        if res is not None and res.ok:
+            return                                 # the solve already filled res.online
+        cats = self._groups_on()
+        if not any(k in catalogue.ONLINE for k in cats):
+            return
+        base = (self.cfg.get("tickwhale_base") or "").strip()
+        if not base or self.img is None:
+            return
+        try:
+            ra0, de0, rad, _area = annotate.field_geometry(wcs, self.img.width, self.img.height)
+        except Exception:
+            return
+        key = (round(ra0, 2), round(de0, 2), round(rad, 2))
+        if key in self._region_cache:
+            self.overlay_online[path] = list(self._region_cache[key])
+            if path == self.current:
+                self._refresh_overlay()
+            return
+        if self.overlay_online.get(path):
+            return                                 # already asked for this very frame
+        job = (path, key, ra0, de0, rad, cats, base)
+        if self._region_lookup is not None and self._region_lookup.isRunning():
+            self._region_next = job                # the running query finishes first; this one follows
+            return
+        self._start_region(job)
+
+    def _start_region(self, job):
+        path, key, ra0, de0, rad, cats, base = job
+        self._region_lookup = RegionLookup(path, key, ra0, de0, rad, cats, base, self)
+        self._region_lookup.found.connect(self._region_found)
+        self._region_lookup.start()
+
+    def _region_found(self, path, key, recs):
+        """Store what the online database returned and put the labels on the picture that asked for them."""
+        self._region_cache[key] = list(recs)
+        self.overlay_online[path] = list(recs)
+        if path == self.current:
+            self._refresh_overlay()
+        nxt, self._region_next = self._region_next, None
+        if nxt is not None:
+            self._start_region(nxt)
 
     def _refresh_overlay(self):
         data = self.overlay_data.get(self.current)
