@@ -2541,7 +2541,7 @@ def main():
     # the popular-field index is bundled with the installer: 1,300 hot fields and their Gaia patterns
     from skyannot import fieldindex                              # noqa: E402
     fields, stars, photos = fieldindex.coverage()
-    check("the popular-field index is bundled", fields >= 1200 and stars >= 100000,
+    check("the popular-field index is bundled", fields >= 2500 and stars >= 200000,
           "%d fields, %d stars" % (fields, stars))
     check("every field carries a usable pattern", all(len(f["stars"]) >= 12 for f in fieldindex.load()), "")
     nearest, sep = fieldindex.nearest(61.0, 26.5)
