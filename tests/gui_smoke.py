@@ -2496,6 +2496,37 @@ def main():
         tickwhale.search = real_search
     check("an online-only name in the folder is recognised",
           bool(g2) and g2[0] == "LBN777" and g2[2] is not None, str(g2[:2]))
+    # the remote image fallback: upload a thumbnail, poll, and rebuild the WCS at full resolution
+    class _Resp2:
+        def __init__(self, obj):
+            self._obj = obj
+            self.status_code = 200
+
+        def json(self):
+            return self._obj
+
+    class _FakeRq:
+        @staticmethod
+        def post(url, json=None, headers=None, timeout=None):
+            return _Resp2({"ok": True, "job": "j1", "status": "running"})
+
+        @staticmethod
+        def get(url, params=None, headers=None, timeout=None):
+            return _Resp2({"ok": True, "ra": 61.0, "dec": 26.5, "name": "nova",
+                           "cd_deg": [[-3.41e-6, 1.2e-7], [1.1e-7, -3.40e-6]]})
+
+    import requests as _rq2                                   # noqa: E402
+    from skyannot import solve as solve_mod2                  # noqa: E402
+    real_post2, real_get2 = _rq2.post, _rq2.get
+    _rq2.post, _rq2.get = _FakeRq.post, _FakeRq.get
+    try:
+        w_remote, rinfo = solve_mod2.remote_image(np.full((500, 800, 3), 0.2, np.float32), api_key="k")
+    finally:
+        _rq2.post, _rq2.get = real_post2, real_get2
+    check("the remote image fallback returns a WCS", w_remote is not None and abs(3600 * w_remote.wcs.cd[0][0]) < 0.1,
+          str(w_remote.wcs.cd[0][0]))
+    check("and reports the engine that solved it", rinfo.get("solver") == "nova", str(rinfo))
+
     # the service answers cd in radians (Nebula3D blind-solve spec); the client must build the same WCS
     class _FakeResp:
         status_code = 200

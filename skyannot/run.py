@@ -24,6 +24,7 @@ class Options:
     target: str = ""                 # optional hint: object name, e.g. "M31"
     target_radec: tuple = ()         # its catalogued position, when the user picked one from the database
     target_object: dict = None       # the online record behind the target (name, position, size, type)
+    remote_fallback: bool = False    # the window turns this on: upload an 800 px thumbnail when all solvers fail
     guess_target_from_name: bool = True   # read the target out of the file/folder name when there is no hint
     tickwhale_base: str = ""         # the online database, for the region query that fills a field
     solvers: tuple = ("ttastro", "astap", "nova")
@@ -465,6 +466,26 @@ def solve(image_path: str, opt: Options, log=print, progress=lambda p, msg: None
             except Exception as e:                     # wrong or failed solve -> next solver
                 errors.append("%s: %s" % (name, e))
                 log("  %s failed: %s" % (name, e))
+        if wcs is None and opt.remote_fallback:
+            # The local solvers need a FITS header or a Messier field nearby; a thumbnail upload lets the
+            # service extract its own stars and race its astrometry.net against nova. Slow (minutes) but it
+            # is the only path for arbitrary screenshots and processed pictures.
+            try:
+                log("  trying the remote image solver (thumbnail, this can take a few minutes)")
+                w0, rinfo = solver.remote_image(disp, api_key=opt.api_key, log=log)
+            except Exception as e:
+                log("  remote image solver failed: %s" % e)
+                w0, rinfo = None, {}
+            if w0 is not None:
+                try:
+                    ra, de, mag, gaia_rows, gaia_capped, gaia_cap = _reference_stars(
+                        w0, img.width, img.height, epoch, opt.gaia_mag, opt.gaia_max_rows, log)
+                    wcs, stats = refine.refine(w0, det, img.width, img.height, ra, de, mag, log=log)
+                except Exception as e:
+                    log("  refinement skipped: %s" % e)
+                    wcs, stats = w0, {"refined": False}
+                stats["solver"] = rinfo.get("solver", "remote")
+
         if wcs is None:
             raise RuntimeError("could not solve the image (" + "; ".join(errors or ["no solver available"]) + ")")
         res.wcs, res.stats = wcs, stats

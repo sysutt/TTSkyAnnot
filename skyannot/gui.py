@@ -3904,6 +3904,7 @@ class MainWindow(QMainWindow):
                           astap_path=self.cfg.get("astap_path", ""),
                           nova_key=self.cfg.get("nova_api_key", ""),
                           api_key=self.cfg.get("api_key", ""), gaia_mag=float(self.cfg.get("gaia_mag", 16)),
+                          remote_fallback=bool(self.cfg.get("remote_fallback", True)),
                           cats=tuple(self.cfg["cats"]),
                           write_txt=self.cfg["write_txt"], write_preview=self.cfg["write_preview"],
                           write_outlines=self.cfg["write_outlines"], write_wcs=self.cfg["write_wcs"],
