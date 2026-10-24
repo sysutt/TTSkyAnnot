@@ -3999,6 +3999,12 @@ class MainWindow(QMainWindow):
                 cra, cdec = st.get("center_ra"), st.get("center_dec")
                 if cra is not None and cdec is not None:
                     self.ed_coord.setText(_coord_text(cra, cdec))
+                # show the annotations at once: the reload below re-reads the file and can race the
+                # worker's result, which left a solved frame looking unsolved
+                if res.wcs is not None:
+                    self.wcs = res.wcs
+                    self.overlay_data[res.image] = (res.shapes, res.named, res.grid)
+                    self._refresh_overlay()
                 self._solved_reload = True
                 self.show_image(res.image)              # reload: header may now carry the solution
         else:
