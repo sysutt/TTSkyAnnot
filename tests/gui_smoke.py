@@ -2514,6 +2514,16 @@ def main():
           len(rows) == 2 and abs(float(rows[0]["RA_ICRS"]) - 61.0) < 1e-6, str(rows[:1]))
     check("and asks for the solved field", calls.get("args", ("", "", "", 0))[3] == 16.0, str(calls.get("args")))
 
+    # the popular-field index is bundled with the installer: 1,300 hot fields and their Gaia patterns
+    from skyannot import fieldindex                              # noqa: E402
+    fields, stars, photos = fieldindex.coverage()
+    check("the popular-field index is bundled", fields >= 1200 and stars >= 100000,
+          "%d fields, %d stars" % (fields, stars))
+    check("every field carries a usable pattern", all(len(f["stars"]) >= 12 for f in fieldindex.load()), "")
+    nearest, sep = fieldindex.nearest(61.0, 26.5)
+    check("LBN777's field is in it", nearest is not None and sep < 0.1 and len(nearest["stars"]) >= 40,
+          "%.2f deg, %d stars" % (sep, len(nearest["stars"]) if nearest else 0))
+
     check("a name with no catalogue designation stays blind",
           run.guess_target(r"C:\x\Image19.jpg", "") == (), str(run.guess_target(r"C:\x\Image19.jpg", "")))
 
