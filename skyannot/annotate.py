@@ -329,8 +329,9 @@ def star_blocks(P: Projector, ra0, de0, rad, area, epoch, gaia_mag=16.0, gaia_ro
             if not P.inside(x[i], y[i]):
                 continue
             rows.append(Row("", r2000[0][i], r2000[1][i], x[i], y[i],
-                            [_fmt(_num(r["RPmag"]), 3), _fmt(_num(r["Gmag"]), 3), _fmt(_num(r["BPmag"]), 3),
-                             _fmt(_num(r["Plx"]), 4), ""], _num(r["Gmag"]), {"source_id": r["Source"]}))
+                            [_fmt(_num(r.get("RPmag")), 3), _fmt(_num(r.get("Gmag")), 3),
+                             _fmt(_num(r.get("BPmag")), 3), _fmt(_num(r.get("Plx")), 4), ""],
+                            _num(r.get("Gmag")), {"source_id": r.get("Source", "")}))
         rows.sort(key=lambda r: r.mag if r.mag is not None else 99)
         if rows:
             blocks.append(Block(vizier.GAIA_BLOCK, "Gaia Data Release 3, VizieR I/355/gaiadr3 (Gaia Collaboration, "
