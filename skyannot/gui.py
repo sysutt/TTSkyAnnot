@@ -3983,6 +3983,11 @@ class MainWindow(QMainWindow):
             self.btn_folder.setEnabled(True)
             self._last_out = next(iter(res.outputs.values()), res.image)
             if res.image == self.current:
+                # the solved centre goes into the coordinate box, so the next run of this frame starts
+                # from a known position instead of solving blind again
+                cra, cdec = st.get("center_ra"), st.get("center_dec")
+                if cra is not None and cdec is not None:
+                    self.ed_coord.setText(_coord_text(cra, cdec))
                 self._solved_reload = True
                 self.show_image(res.image)              # reload: header may now carry the solution
         else:
@@ -4438,6 +4443,15 @@ def _paint_title_bar(win, dark: bool = True) -> None:
                                           SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER)
     except Exception:
         pass
+
+
+def _coord_text(ra, dec):
+    """The centre in the same shape the coordinate box shows: 05 34 31.9  +22 00 52."""
+    h = (ra / 15.0) % 24
+    d = abs(dec)
+    return "%02d %02d %04.1f  %s%02d %02d %02d" % (int(h), int(h * 60) % 60, (h * 3600) % 60,
+                                                  "-" if dec < 0 else "+", int(d), int(d * 60) % 60,
+                                                  int(d * 3600) % 60)
 
 
 def _hms(ra):
