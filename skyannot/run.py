@@ -82,15 +82,23 @@ def _epoch(date_text: str | None, path: str) -> float:
 
 def _reference_stars(wcs0, width, height, epoch, gaia_mag, max_rows, log):
     """One Gaia query serves both the refinement (deeper for small fields) and the annotation text.
-    Very wide fields are capped brightest-first at max_rows. Returns (ra, dec, mag, rows, faintest_if_capped)."""
+
+    The refinement needs a few hundred stars, not a few hundred thousand: a very wide field is capped
+    brightest-first so a 3-degree frame does not pull 200 000 rows over VizieR before it can be annotated.
+    Returns (ra, dec, mag, rows, faintest_if_capped, cap)."""
     ra0, de0, rad, area = annotate.field_geometry(wcs0, width, height)
     lim = max(gaia_mag, refine.reference_mag_limit(area))
-    rows = vizier.cone("gaia", ra0, de0, rad, mag_max=lim, max_rows=max_rows, log=log)
+    cap = max_rows
+    if area > 3.0:
+        cap = min(cap, 30000)
+    elif area > 1.0:
+        cap = min(cap, 60000)
+    rows = vizier.cone("gaia", ra0, de0, rad, mag_max=lim, max_rows=cap, log=log)
     f = lambda k: np.array([float(r[k]) if r[k] else np.nan for r in rows], float)  # noqa: E731
     ra, de = refine.propagate(f("RA_ICRS"), f("DE_ICRS"), f("pmRA"), f("pmDE"), 2016.0, epoch)
     gm = f("Gmag")
-    capped = float(np.nanmax(gm)) if len(rows) >= max_rows and len(gm) else None
-    return ra, de, gm, rows, capped
+    capped = float(np.nanmax(gm)) if len(rows) >= cap and len(gm) else None
+    return ra, de, gm, rows, capped, cap
 
 
 def online_records_cone(ra, dec, radius, cats, tickwhale_base):
@@ -433,9 +441,16 @@ def solve(image_path: str, opt: Options, log=print, progress=lambda p, msg: None
                     continue
                 log("  solved by %s" % name)
                 progress(0.40, "refine")
-                ra, de, mag, gaia_rows, gaia_capped = _reference_stars(w0, img.width, img.height, epoch,
-                                                                       opt.gaia_mag, opt.gaia_max_rows, log)
-                wcs, stats = refine.refine(w0, det, img.width, img.height, ra, de, mag, log=log)
+                # A catalogue outage must not throw away a solution the solver already delivered: without
+                # Gaia stars the frame keeps the solver's own WCS, a little less precise but annotated.
+                try:
+                    ra, de, mag, gaia_rows, gaia_capped, gaia_cap = _reference_stars(
+                        w0, img.width, img.height, epoch, opt.gaia_mag, opt.gaia_max_rows, log)
+                    wcs, stats = refine.refine(w0, det, img.width, img.height, ra, de, mag, log=log)
+                except Exception as cat_err:
+                    log("  refinement skipped: %s" % cat_err)
+                    ra, de, mag, gaia_rows, gaia_capped, gaia_cap = None, None, None, [], None, None
+                    wcs, stats = w0, {"refined": False}
                 stats["solver"] = name
                 break
             except Exception as e:                     # wrong or failed solve -> next solver
@@ -454,7 +469,7 @@ def solve(image_path: str, opt: Options, log=print, progress=lambda p, msg: None
                                               gaia_rows=gaia_rows, log=log, cats=opt.cats)
         if gaia_capped is not None:
             notes.append("Gaia DR3 limited to the brightest %d stars of this wide field (down to G %.2f)"
-                         % (opt.gaia_max_rows, gaia_capped))
+                         % (gaia_cap or opt.gaia_max_rows, gaia_capped))
         blocks += sblocks
         # The online catalogues are filled by a cone query around the solved centre: the frame's own geometry is
         # the best query there is, and the radius covers the corners, so nothing in the picture is missed. The
