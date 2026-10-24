@@ -90,17 +90,45 @@ def _reference_stars(wcs0, width, height, epoch, gaia_mag, max_rows, log):
     return ra, de, gm, rows, capped
 
 
-def local_overlay(img, wcs, cats=None, target=None):
-    """Deep-sky shapes, named stars and the RA/Dec grid for an image that already carries a solution
-    (bundled catalogues only, no network)."""
+def online_records(P, cats, tickwhale_base):
+    """The online objects inside the field, for the catalogues that are switched on (empty without a base).
+
+    A frame that arrives with a solution in its header never goes through solve(), so this is the only way its
+    online catalogues can be annotated; the query is the same cone the solve path uses.
+    """
+    on = [k for k in (cats or ()) if k in catalogue.ONLINE]
+    if not on or not tickwhale_base:
+        return []
+    from . import tickwhale
+    try:
+        recs = tickwhale.region(tickwhale_base, P.ra0, P.de0, P.rad, catalogs=on)
+    except Exception:
+        return []
+    return [r for r in recs if catalogue.catalogue_of(r) in catalogue.ONLINE]
+
+
+def local_overlay_with_online(img, wcs, cats=None, target=None, tickwhale_base=""):
+    """Like local_overlay, plus the online records the region query returns (for the overlay and a re-filter)."""
     P = annotate.Projector(wcs, img.width, img.height)
     found = shapes.collect(P, cats=cats)
+    recs = online_records(P, cats, tickwhale_base)
+    for rec in recs:
+        key = catalogue.catalogue_of(rec)
+        extra = shapes.online_shape(P, rec, key) if key else None
+        if extra is not None:
+            found.append(extra)
     if target:
         key = catalogue.catalogue_of(target)
         extra = shapes.online_shape(P, target, key) if key else None
         if extra is not None:
             found.append(extra)
-    return (found, annotate.named_local(P), grid.compute(wcs, img.width, img.height))
+    return found, annotate.named_local(P), grid.compute(wcs, img.width, img.height), recs
+
+
+def local_overlay(img, wcs, cats=None, target=None):
+    """Deep-sky shapes, named stars and the RA/Dec grid for an image that already carries a solution."""
+    found, named, grid_, _recs = local_overlay_with_online(img, wcs, cats, target)
+    return found, named, grid_
 
 
 def process(path: str, opt: Options, log=print, progress=lambda p, msg: None) -> Result:

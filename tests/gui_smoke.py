@@ -2447,6 +2447,26 @@ def main():
     check("and are gone when that catalogue is switched off",
           annotate.online_region_blocks(proj3, recs, ("m",)) == [], "")
 
+    # a frame that arrives with a solution in its header never goes through solve(); it must still get the
+    # online objects of its field
+    import types                                            # noqa: E402
+    fake_img = types.SimpleNamespace(width=500, height=500)
+    real_region = tickwhale.region
+
+    def fake_region(base, ra, dec, radius, catalogs=None, limit=500, timeout=8.0):
+        return [dict(rec3)]
+
+    try:
+        tickwhale.region = fake_region
+        found, named2, grid2, online2 = run.local_overlay_with_online(
+            fake_img, w3, cats=("lbn",), tickwhale_base="https://x.test")
+    finally:
+        tickwhale.region = real_region
+    check("a header-solved frame still gets its online objects",
+          any(s["label"].startswith("LBN777") for s in found), str([s["label"] for s in found][:4]))
+    check("and the records are kept for a later refilter", [r["name"] for r in online2] == ["LBN777"],
+          str([r["name"] for r in online2]))
+
     # 4u2 ── the catalogue switches decide what is drawn and how it is labelled
     from skyannot import shapes                            # noqa: E402
     w2 = WCS(naxis=2)

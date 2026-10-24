@@ -631,6 +631,7 @@ class LoadWorker(QThread):
         self.bayer_pattern = bayer_pattern
         self.dso_cats = dso_cats            # enabled deep-sky catalogues, for a frame with a header solution
         self.target_object = None           # the online record the target name resolves to, if any
+        self.tickwhale_base = ""             # the online database, for the region query
 
     def run(self):
         out = {"path": self.path}
@@ -653,8 +654,9 @@ class LoadWorker(QThread):
             out["wcs"] = wcs
             if wcs is not None:
                 try:
-                    out["shapes"], out["named"], out["grid"] = run.local_overlay(
-                        img, wcs, cats=self.dso_cats, target=self.target_object)
+                    out["shapes"], out["named"], out["grid"], out["online"] = run.local_overlay_with_online(
+                        img, wcs, cats=self.dso_cats, target=self.target_object,
+                        tickwhale_base=self.tickwhale_base)
                 except Exception:
                     out["shapes"], out["named"], out["grid"] = [], [], []
         except Exception as e:
@@ -2569,6 +2571,7 @@ class MainWindow(QMainWindow):
         self.worker = None
         self.results = {}           # path -> Result
         self.overlay_data = {}      # path -> (shapes, named, grid)
+        self.overlay_online = {}    # path -> online records the region query returned
         self._key_offer_shown = False   # the "where do I get a key" box is offered once per session
         self._folder = None         # folder the left-hand list is showing
         self._folder_dirty = False  # a file was removed or moved: rebuild the list even for the same folder
@@ -3370,6 +3373,7 @@ class MainWindow(QMainWindow):
                                       self.cfg.get("bayer_pattern", "auto"), self,
                                       dso_cats=self._groups_on())
         ld.target_object = self._target_obj
+        ld.tickwhale_base = self.cfg.get("tickwhale_base", "")
         ld.done.connect(self._loaded)
         ld.start()
 
@@ -3387,8 +3391,10 @@ class MainWindow(QMainWindow):
         self.wcs = res.wcs if (res and res.ok) else out.get("wcs")
         if res and res.ok:
             self.overlay_data[out["path"]] = (res.shapes, res.named, res.grid)
+            self.overlay_online[out["path"]] = list(getattr(res, "online", None) or [])
         elif out.get("wcs") is not None:
             self.overlay_data[out["path"]] = (out.get("shapes"), out.get("named"), out.get("grid"))
+            self.overlay_online[out["path"]] = list(out.get("online") or [])
         # keep zoom and position across frames of the same size (see ImageView._view_state)
         state = self._view_state
         if state is not None and state[0] != (out["qimage"].width(), out["qimage"].height()):
@@ -3512,17 +3518,19 @@ class MainWindow(QMainWindow):
                     P = annotate.Projector(self.wcs, self.img.width, self.img.height)
                     fresh = shapes_mod.collect(P, cats=on)
                     res_now = self.results.get(self.current)
-                    for rec in (getattr(res_now, "online", None) or []):
+                    online_here = list(getattr(res_now, "online", None) or []) or list(
+                        self.overlay_online.get(self.current) or [])
+                    for rec in online_here:
                         okey = catalogue.catalogue_of(rec)
                         if okey in on:
-                            extra = shapes_mod.online_shape(P, rec, okey)
-                            if extra is not None:
-                                fresh.append(extra)
+                            extra_shape = shapes_mod.online_shape(P, rec, okey)
+                            if extra_shape is not None:
+                                fresh.append(extra_shape)
                     if self._target_obj:
                         tkey = catalogue.catalogue_of(self._target_obj)
-                        extra = shapes_mod.online_shape(P, self._target_obj, tkey) if tkey else None
-                        if extra is not None:
-                            fresh.append(extra)
+                        extra_shape = shapes_mod.online_shape(P, self._target_obj, tkey) if tkey else None
+                        if extra_shape is not None:
+                            fresh.append(extra_shape)
                     data = (fresh, data[1], data[2])
                     self.overlay_data[self.current] = data
                     res = self.results.get(self.current)
