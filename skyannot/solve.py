@@ -18,11 +18,38 @@ import time
 import numpy as np
 
 TTASTRO_URL = "https://ttastro.com/api/i/solve"
+TTASTRO_STARS = "https://ttastro.com/api/i/starcone"     # the same service, star cones for refinement
 NOVA_URL = "https://nova.astrometry.net"
 
 
 class SolveError(RuntimeError):
     pass
+
+
+def fetch_stars(ra, dec, radius, mag=16.0, limit=80000, timeout=20.0, log=print):
+    """A cone of catalogue stars from the online service: [[ra, dec, G], ...] brightest first, or [].
+
+    The service reads its own Gaia DR3 G<16 index, so the app refines a plate solution without waiting for
+    VizieR (seconds against minutes) and without depending on a third-party mirror being up.
+    """
+    import requests
+    from . import __version__
+    payload = {"ra": float(ra) % 360.0, "dec": max(-89.5, min(89.5, float(dec))),
+               "radius": round(float(radius), 4), "mag": float(mag), "limit": int(limit)}
+    try:
+        r = requests.post(TTASTRO_STARS, json=payload,
+                          headers={"User-Agent": "TTSkyAnnot/%s (Windows)" % __version__}, timeout=timeout)
+        if r.status_code != 200:
+            log("  star cone: HTTP %d" % r.status_code)
+            return []
+        d = r.json()
+        if not d.get("ok"):
+            log("  star cone: %s" % (d.get("reason") or "not available"))
+            return []
+        return d.get("stars") or []
+    except Exception as e:
+        log("  star cone: %s" % e)
+        return []
 
 
 def _tan_wcs(crval, crpix, cd):

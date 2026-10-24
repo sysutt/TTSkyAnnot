@@ -93,7 +93,16 @@ def _reference_stars(wcs0, width, height, epoch, gaia_mag, max_rows, log):
         cap = min(cap, 30000)
     elif area > 1.0:
         cap = min(cap, 60000)
-    rows = vizier.cone("gaia", ra0, de0, rad, mag_max=lim, max_rows=cap, log=log)
+    # The online service has the same Gaia DR3 G<16 index and answers in about a second; VizieR is the
+    # fallback for when the service is unreachable, not the normal path.
+    rows = []
+    cone = solver.fetch_stars(ra0, de0, rad, mag=min(16.0, lim), limit=cap, log=log)
+    if cone:
+        rows = [{"RA_ICRS": "%.6f" % a, "DE_ICRS": "%.6f" % d, "Gmag": "%.3f" % m, "pmRA": "0", "pmDE": "0"}
+                for a, d, m in cone]
+        log("  reference stars: %d from the online star index" % len(rows))
+    else:
+        rows = vizier.cone("gaia", ra0, de0, rad, mag_max=lim, max_rows=cap, log=log)
     f = lambda k: np.array([float(r[k]) if r[k] else np.nan for r in rows], float)  # noqa: E731
     ra, de = refine.propagate(f("RA_ICRS"), f("DE_ICRS"), f("pmRA"), f("pmDE"), 2016.0, epoch)
     gm = f("Gmag")
