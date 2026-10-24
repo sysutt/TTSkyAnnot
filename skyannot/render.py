@@ -80,9 +80,14 @@ def render(display_rgb, shapes, named_rows, out_path, max_edge=4000, quality=92,
         col = style.rgb(style.color_for(e)) + (255,)
         polys, closed = shapes_mod.display_polygons(e, shape_style)
         for poly in polys:
-            pts = [(x * ks, y * ks) for x, y in poly]
-            if len(pts) >= 2:
-                dr.line(pts + [pts[0]] if closed else pts, fill=col, width=lw)
+            # a catalogue entry with a broken size must never paint across the picture: drop non-finite
+            # points and keep the rest near the canvas (this is what turned a bad shape into a flat fill)
+            pts = [(x * ks, y * ks) for x, y in poly if np.isfinite(x) and np.isfinite(y)]
+            if len(pts) < 2:
+                continue
+            lim_x, lim_y = 4.0 * OW, 4.0 * OH
+            pts = [(min(max(x, -lim_x), 2 * lim_x), min(max(y, -lim_y), 2 * lim_y)) for x, y in pts]
+            dr.line(pts + [pts[0]] if closed else pts, fill=col, width=lw)
         if e.get("kind") == "point":
             x, y = e["x"] * ks, e["y"] * ks
             r = 6 * lw

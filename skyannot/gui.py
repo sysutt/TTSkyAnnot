@@ -4070,8 +4070,15 @@ class MainWindow(QMainWindow):
         try:
             img = imageio.load(path, want_debayer=opt.debayer,
                                pattern="" if opt.bayer_pattern == "auto" else opt.bayer_pattern)
-            run.write_outputs(img, res, opt, imageio.display_stretch(img, opt.stretch),
-                              log=self.logbox.appendPlainText)
+            disp = imageio.display_stretch(img, opt.stretch)
+            try:
+                import numpy as _np
+                a = _np.asarray(disp)
+                self.logbox.appendPlainText("保存预览：%d × %d，左上角像素 %s" % (
+                    a.shape[1], a.shape[0], _np.round(a[0, 0], 2).tolist()))
+            except Exception:
+                pass
+            run.write_outputs(img, res, opt, disp, log=self.logbox.appendPlainText)
         except Exception as e:
             QMessageBox.warning(self, "TTSkyAnnot", "%s\n\n%s" % (t("保存失败"), e))
             return
