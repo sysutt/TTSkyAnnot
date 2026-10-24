@@ -1856,9 +1856,6 @@ class SettingsDialog(FramedDialog):
         row.addWidget(self.astap)
         row.addWidget(b)
         f.addRow(t("ASTAP 路径"), row)
-        self.nova = QLineEdit(cfg.get("nova_api_key", ""))
-        self.nova.setEchoMode(QLineEdit.PasswordEchoOnEdit)
-        f.addRow(t("nova API key"), self.nova)
 
         # ── 星表与天体库 ─────────────────────────────────────────────────────────────────────
         section("星表")
@@ -1955,7 +1952,6 @@ class SettingsDialog(FramedDialog):
     def values(self):
         self.cfg.update(language=self.lang.currentData(), theme=self.theme_name(),
                         api_key=self.apikey.text().strip(),
-                        nova_api_key=self.nova.text().strip(),
                         astap_path=self.astap.text().strip(), gaia_mag=self.gmag.value(),
                         out_dir=self.out.text().strip(), slide_interval=self.slide.value(),
                         pixinsight_path=self.pi.text().strip(),
@@ -3916,9 +3912,10 @@ class MainWindow(QMainWindow):
                           target_object=self._target_obj,
                           tickwhale_base=self.cfg.get("tickwhale_base", ""),
                           astap_path=self.cfg.get("astap_path", ""),
-                          nova_key=self.cfg.get("nova_api_key", ""),
                           api_key=self.cfg.get("api_key", ""), gaia_mag=float(self.cfg.get("gaia_mag", 16)),
                           remote_fallback=bool(self.cfg.get("remote_fallback", True)),
+                          solve_image_url=self.cfg.get("solve_image_url", ""),
+                          solve_result_url=self.cfg.get("solve_result_url", ""),
                           cats=tuple(self.cfg["cats"]),
                           write_txt=self.cfg["write_txt"], write_preview=self.cfg["write_preview"],
                           write_outlines=self.cfg["write_outlines"], write_wcs=self.cfg["write_wcs"],

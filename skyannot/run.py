@@ -25,11 +25,12 @@ class Options:
     target_radec: tuple = ()         # its catalogued position, when the user picked one from the database
     target_object: dict = None       # the online record behind the target (name, position, size, type)
     remote_fallback: bool = False    # the window turns this on: upload an 800 px thumbnail when all solvers fail
+    solve_image_url: str = ""        # defaults to the ttastro direct endpoint
+    solve_result_url: str = ""
     guess_target_from_name: bool = True   # read the target out of the file/folder name when there is no hint
     tickwhale_base: str = ""         # the online database, for the region query that fills a field
-    solvers: tuple = ("ttastro", "astap", "nova")
+    solvers: tuple = ("ttastro", "astap")
     astap_path: str = ""
-    nova_key: str = ""
     api_key: str = ""                # ttastro online solve key (empty = anonymous allowance)
     gaia_mag: float = 16.0
     debayer: bool = True             # interpolate a one-shot colour mosaic before solving or annotating
@@ -444,10 +445,6 @@ def solve(image_path: str, opt: Options, log=print, progress=lambda p, msg: None
                                       else "astap: no path configured and none installed")
                         continue
                     w0, info = solver.solve_astap(disp, hint, exe=found, log=log)
-                elif name == "nova":
-                    if not opt.nova_key:
-                        continue
-                    w0, info = solver.solve_nova(disp, opt.nova_key, log=log)
                 else:
                     continue
                 log("  solved by %s" % name)
@@ -475,8 +472,11 @@ def solve(image_path: str, opt: Options, log=print, progress=lambda p, msg: None
             # service extract its own stars and race its astrometry.net against nova. Slow (minutes) but it
             # is the only path for arbitrary screenshots and processed pictures.
             try:
-                log("  trying the remote image solver (thumbnail, this can take a few minutes)")
-                w0, rinfo = solver.remote_image(disp, api_key=opt.api_key, log=log)
+                log("  正在识别星场，可能需要几分钟…")
+                w0, rinfo = solver.remote_image(disp, api_key=opt.api_key, log=log,
+                                               pixscale=hint.get("pixscale"),
+                                               image_url=opt.solve_image_url or None,
+                                               result_url=opt.solve_result_url or None)
             except Exception as e:
                 log("  remote image solver failed: %s" % e)
                 w0, rinfo = None, {}
