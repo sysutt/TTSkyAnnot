@@ -1293,6 +1293,18 @@ def main():
           str([bool(c.styleSheet()) for c in dlg.chk.values()]))
     check("the remember box is a real check box, not a pill",
           dlg.remember.styleSheet() != gui.TOGGLE_QSS, dlg.remember.styleSheet()[:40])
+
+    # writing into a picture's header is invasive and off by default; a raster gets a sidecar instead
+    check("the solution write is off unless asked for", not dlg.chk["wcs"].isChecked(), "")
+    check("the config keeps it off by default", config.DEFAULTS["write_wcs"] is False,
+          str(config.DEFAULTS.get("write_wcs")))
+    check("a raster picture is offered a .wcs sidecar, not a header write",
+          ".wcs" in dlg.chk["wcs"].text(), dlg.chk["wcs"].text())
+    fits_dlg = gui.SaveDialog("C:\\x\\frame.fit", ["C:\\x\\frame.fit"])
+    check("a FITS picture is offered the header write",
+          "写回图片" in fits_dlg.chk["wcs"].text() and not fits_dlg.chk["wcs"].isChecked(),
+          fits_dlg.chk["wcs"].text())
+    fits_dlg.close()
     # the save dialog can write into a folder picked right there, not only beside the picture
     out = tempfile.mkdtemp(prefix="tts-save-")
     try:

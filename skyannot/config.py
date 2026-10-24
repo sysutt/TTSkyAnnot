@@ -40,7 +40,7 @@ DEFAULTS = {
     "write_txt": True,
     "write_preview": True,
     "write_outlines": True,
-    "write_wcs": True,
+    "write_wcs": False,       # writing into the picture's header is invasive: opt-in
     "out_dir": "",             # "" = next to the image
     "api_key": "",                                   # online solve key (ttastro); empty = anonymous allowance
     "update_url": "https://www.ttastro.com/ttskyannot/updates/",
