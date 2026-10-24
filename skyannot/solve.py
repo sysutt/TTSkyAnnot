@@ -159,7 +159,8 @@ def solve_ttastro(stars, width, height, hint=None, log=print, timeout=60.0, max_
     name = d.get("name") or (d.get("matched") if isinstance(d.get("matched"), str) else "")
     info = {"solver": "ttastro", "name": name, "matched": d.get("matched"), "nstars": d.get("nstars"),
             "rms_arcsec": d.get("rms_arcsec"), "objects": d.get("objects") or [],
-            "parity": d.get("parity"), "elapsed_ms": d.get("elapsed_ms")}
+            "parity": d.get("parity"), "elapsed_ms": d.get("elapsed_ms"),
+            "rotation": d.get("rotation"), "north_angle": d.get("north_angle")}
     return w, info
 
 
