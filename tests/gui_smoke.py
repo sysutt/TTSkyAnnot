@@ -2496,6 +2496,24 @@ def main():
         tickwhale.search = real_search
     check("an online-only name in the folder is recognised",
           bool(g2) and g2[0] == "LBN777" and g2[2] is not None, str(g2[:2]))
+    # the refinement takes its reference stars from the online star cone; VizieR is only the fallback
+    from skyannot import solve as solver_mod                   # noqa: E402
+    real_fetch = solver_mod.fetch_stars
+    calls = {}
+
+    def fake_fetch(ra, dec, radius, mag=16.0, limit=80000, timeout=20.0, log=print):
+        calls["args"] = (round(ra, 2), round(dec, 2), round(radius, 2), mag)
+        return [[61.0, 26.5, 12.0], [61.1, 26.6, 13.0]]
+
+    solver_mod.fetch_stars = fake_fetch
+    try:
+        ra, de, mag, rows, capped, cap = run._reference_stars(w3, 500, 500, 2026.0, 16.0, 60000, lambda m: None)
+    finally:
+        solver_mod.fetch_stars = real_fetch
+    check("the refinement takes its stars from the online cone",
+          len(rows) == 2 and abs(float(rows[0]["RA_ICRS"]) - 61.0) < 1e-6, str(rows[:1]))
+    check("and asks for the solved field", calls.get("args", ("", "", "", 0))[3] == 16.0, str(calls.get("args")))
+
     check("a name with no catalogue designation stays blind",
           run.guess_target(r"C:\x\Image19.jpg", "") == (), str(run.guess_target(r"C:\x\Image19.jpg", "")))
 
