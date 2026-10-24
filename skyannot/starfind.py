@@ -19,6 +19,7 @@ MAX_STAR_PX = 900
 MIN_STAR_PX = 3
 MAX_ELONG = 2.6
 MIN_FILL = 0.32
+MIN_PEAK = 0.0           # peak / mean gate (off: measured on LBN777 it removed real stars)
 
 
 def _background(luma):
@@ -78,7 +79,8 @@ def _measure(xs, ys, v):
     l1, l2 = tr / 2 + math.sqrt(disc), tr / 2 - math.sqrt(disc)
     elong = math.sqrt(l1 / l2) if l2 > 1e-6 else 99.0
     fill = n / max(1, (int(xs.max()) - int(xs.min()) + 1) * (int(ys.max()) - int(ys.min()) + 1))
-    return n, s, cx, cy, elong, fill
+    peak = float(v.max())
+    return n, s, cx, cy, elong, fill, peak
 
 
 def detect(luma, sigma=4.0, max_stars=300):
@@ -117,8 +119,10 @@ def detect(luma, sigma=4.0, max_stars=300):
         if m:
             cand.append((int(ys[st]) * w + int(xs[st]), m))
     out = []
-    for seed, (n, s, cx, cy, elong, fill) in cand:
+    for seed, (n, s, cx, cy, elong, fill, peak) in cand:
         if n < MIN_STAR_PX or elong > MAX_ELONG or fill < MIN_FILL:
+            continue
+        if peak / max(1e-6, s / n) < MIN_PEAK:
             continue
         if cx < 2 or cy < 2 or cx > w - 3 or cy > h - 3:
             continue
