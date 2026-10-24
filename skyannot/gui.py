@@ -2053,17 +2053,25 @@ class SaveDialog(FramedDialog):
         lay.addLayout(row)
         lay.addSpacing(SP["5"])
 
+        # A raster picture has no header to write into: the solution becomes a sidecar .wcs beside it. The
+        # option says which of the two it is, and neither is ticked by writing into the picture until asked.
+        sidecar = imageio.needs_sidecar(path)
+        wcs_text = t("解析结果另存 .wcs") if sidecar else t("解析结果写回图片")
+        wcs_tip = (t("JPG/PNG/TIFF 没有可写的天球头，解析结果会另存为同名 .wcs 文件，图片本身不动")
+                   if sidecar else t("把天球解写进原文件的文件头（像素不动），仍属于修改原文件，默认不勾"))
         self.chk = {}
         for key, text in (("txt", "天体列表 TXT"), ("outlines", "轮廓坐标文件"),
-                          ("preview", "标注图"), ("wcs", "解析结果写回图片")):
-            c = _toggle(self, t(text), bool(defaults.get(key, True)))
+                          ("preview", "标注图"), ("wcs", wcs_text)):
+            c = _toggle(self, t(text), bool(defaults.get(key, key != "wcs")))
             c.setStyleSheet(TOGGLE_QSS)
-            c.setToolTip(items[0] if items else "")
+            c.setToolTip(wcs_tip if key == "wcs" else (items[0] if items else ""))
             lay.addWidget(c, 0, Qt.AlignLeft)
             self.chk[key] = c
 
         lay.addSpacing(SP["5"])
-        hint = QLabel(t("不勾就不会写任何文件；「写回图片」会修改原文件的文件头（像素不动）"))
+        hint = QLabel(t("不勾就不会写任何文件；「写回图片」会修改原文件的文件头（像素不动）")
+                      if not sidecar else
+                      t("不勾就不会写任何文件；这里只生成 .wcs 文本文件，不会改动图片"))
         hint.setObjectName("note")
         hint.setWordWrap(True)
         lay.addWidget(hint)
@@ -3135,7 +3143,7 @@ class MainWindow(QMainWindow):
                 ("write_outlines", "轮廓坐标文件", ""),
                 ("write_wcs", "解析结果写回图片",
                  "写回会修改原文件的文件头(像素不动)。FITS/XISF 写进文件头,JPG/PNG/TIFF 另存同名 .wcs 文件。"))):
-            c = pill(text, tip, bool(self.cfg.get(key, True)), self._output_changed)
+            c = pill(text, tip, bool(self.cfg.get(key, key != "write_wcs")), self._output_changed)
             self.chk[key] = c
             out_grid.addWidget(c, i // 2, i % 2, Qt.AlignLeft)
         self.controls.addLayout(out_grid)
