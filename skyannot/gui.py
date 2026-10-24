@@ -2644,9 +2644,12 @@ class MainWindow(QMainWindow):
         self._build_panel()
         self.lbl_pos = QLabel("")
         self.lbl_zoom = QLabel("")
+        self.lbl_rot = QLabel("")
+        self.lbl_rot.setToolTip(t("画面「上」相对天球北的夹角（顺时针为正）；镜像的图会一并说明"))
         self.lbl_info = QLabel("")
         sb = self.statusBar()
         sb.addWidget(self.lbl_info, 1)
+        sb.addPermanentWidget(self.lbl_rot)
         sb.addPermanentWidget(self.lbl_pos)
         sb.addPermanentWidget(self.lbl_zoom)
         self.btn_update = QToolButton()
@@ -3435,6 +3438,17 @@ class MainWindow(QMainWindow):
             state = None
         self._view_state = None
         self._loaded_path = out["path"]
+        try:
+            res_now = self.results.get(out["path"])
+            rot = (res_now.stats.get("rotation") if res_now is not None else None)
+            if rot is not None:
+                self.lbl_rot.setText("%s %.1f°" % (t("旋转"), float(rot)))
+            elif self.wcs is not None and self.img is not None:
+                self.lbl_rot.setText("%s %.1f°" % (t("北向"), _north_angle(self.wcs, self.img.width, self.img.height)))
+            else:
+                self.lbl_rot.setText("")
+        except Exception:
+            self.lbl_rot.setText("")
         self._request_online(out)
         self.view.set_image(out["qimage"], view=state)
         self._refresh_overlay()
@@ -4443,6 +4457,16 @@ def _paint_title_bar(win, dark: bool = True) -> None:
                                           SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER)
     except Exception:
         pass
+
+
+def _north_angle(wcs, w, h):
+    """Angle of celestial north from the image's "up" edge, clockwise, in degrees (0..360)."""
+    import math
+    x, y = w / 2.0, h / 2.0
+    a0, d0 = wcs.pixel_to_world_values(x, y)
+    a1, d1 = wcs.pixel_to_world_values(x, max(0.0, y - 100.0))
+    dra = (a1 - a0) * math.cos(math.radians(d0))
+    return (math.degrees(math.atan2(dra, d1 - d0)) + 360.0) % 360.0
 
 
 def _coord_text(ra, dec):

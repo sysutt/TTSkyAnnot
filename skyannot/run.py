@@ -463,6 +463,9 @@ def solve(image_path: str, opt: Options, log=print, progress=lambda p, msg: None
                     ra, de, mag, gaia_rows, gaia_capped, gaia_cap = None, None, None, [], None, None
                     wcs, stats = w0, {"refined": False}
                 stats["solver"] = name
+                for key in ("rotation", "north_angle", "parity"):
+                    if info.get(key) is not None:
+                        stats[key] = info[key]
                 break
             except Exception as e:                     # wrong or failed solve -> next solver
                 errors.append("%s: %s" % (name, e))
