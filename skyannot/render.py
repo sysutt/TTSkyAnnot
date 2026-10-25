@@ -56,7 +56,7 @@ def render(display_rgb, shapes, named_rows, out_path, max_edge=4000, quality=92,
     from PIL import Image, ImageDraw
     if theme_name:
         style.set_theme(theme_name)
-    th = style.theme()
+    tstyle = style.theme()
     h, w = display_rgb.shape[:2]
     k = min(1.0, max_edge / float(max(h, w)))
     im = Image.fromarray((np.clip(display_rgb, 0, 1) * 255).astype(np.uint8))
@@ -69,8 +69,8 @@ def render(display_rgb, shapes, named_rows, out_path, max_edge=4000, quality=92,
     ov = Image.new("RGBA", (OW, OH), (0, 0, 0, 0))
     dr = ImageDraw.Draw(ov, "RGBA")
     lw = max(2, int(round(edge / 1500))) * SS
-    lw = max(1, int(round(lw * float(th.get("line_scale") or 1.0))))
-    fam = th.get("font") or "sans"
+    lw = max(1, int(round(lw * float(tstyle.get("line_scale") or 1.0))))
+    fam = tstyle.get("font") or "sans"
     font = _font(max(14, int(edge / 110)) * SS, bold=True, family=fam)
     sfont = _font(max(12, int(edge / 140)) * SS, family=fam)
     gfont = _font(max(11, int(edge / 150)) * SS, family=fam)
@@ -116,7 +116,7 @@ def render(display_rgb, shapes, named_rows, out_path, max_edge=4000, quality=92,
             ins = style.inside_anchor(polys)
             if ins is not None:
                 ins = (ins[0] * ks, ins[1] * ks, ins[2] * ks, ins[3] * ks)
-            text = e.get("name") or e["label"] if th.get("label_mode") == "name" else e["label"]
+            text = e.get("name") or e["label"] if tstyle.get("label_mode") == "name" else e["label"]
             labels.append(([(x * ks, y * ks, u) for x, y, u in anchors], text, col, font, gap, ins))
     star = style.rgb(style.star_color()) + (255,)
     for r in named_rows or []:
@@ -156,10 +156,10 @@ def render(display_rgb, shapes, named_rows, out_path, max_edge=4000, quality=92,
         if best is None:
             continue                     # crowded patch: better one name missing than two on top of each other
         placed.append(best)
-        if th.get("chip"):
+        if tstyle.get("chip"):
             dr.rounded_rectangle(best, radius=3 * SS, fill=(2, 4, 10, 168),
                                  outline=col[:3] + (200,), width=max(1, int(round(SS))))
-        if th.get("glow"):
+        if tstyle.get("glow"):
             dr.text((best[0] + LP, best[1] + LP), text, font=f, fill=col,
                     stroke_width=max(1, SS), stroke_fill=col[:3] + (90,))
         dr.text((best[0] + LP, best[1] + LP), text, fill=col, font=f)
