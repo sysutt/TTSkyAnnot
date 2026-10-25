@@ -238,14 +238,26 @@ def process(path: str, opt: Options, log=print, progress=lambda p, msg: None) ->
     return res
 
 
+def preview_path(path, style="science", out_dir=None):
+    """The annotated picture for this frame and style. The style goes into the name, so switching styles
+    adds a file instead of overwriting the previous one; out_dir is where the save was pointed at."""
+    name = os.path.splitext(os.path.basename(path))[0]
+    base = out_dir or os.path.dirname(os.path.abspath(path))
+    key = (style or "science").strip() or "science"
+    return os.path.join(base, name + (".annotated.jpg" if key == "science"
+                                      else ".annotated.%s.jpg" % key))
+
+
 def output_paths(path: str, opt: Options) -> list:
     """The files a save would write for this image, in the order they are produced. Empty when every output
     is switched off. Used to tell the user exactly what is about to land in the folder."""
     out_dir = opt.out_dir or os.path.dirname(os.path.abspath(path))
     stem = os.path.join(out_dir, os.path.splitext(os.path.basename(path))[0])
+    style = getattr(opt, "annotation_style", "science") or "science"
+    prev = ".annotated.jpg" if style == "science" else ".annotated.%s.jpg" % style
     out = [stem + ext for on, ext in ((opt.write_txt, ".objects.txt"),
                                       (opt.write_outlines, ".outlines.json"),
-                                      (opt.write_preview, ".annotated.jpg")) if on]
+                                      (opt.write_preview, prev)) if on]
     if opt.write_wcs:
         # a format with no header of its own gets a sidecar; everything else is written into the file itself
         out.append(stem + ".wcs" if imageio.needs_sidecar(path) else path)
@@ -255,7 +267,8 @@ def output_paths(path: str, opt: Options) -> list:
 def write_preview(img, res, opt, display_rgb=None, out_path=None, max_edge=4000):
     """Render only the annotated picture — the way back after switching the style, without re-writing the
     lists and outlines that have not changed."""
-    p = out_path or (os.path.splitext(res.image)[0] + ".annotated.jpg")
+    p = out_path or preview_path(res.image, getattr(opt, "annotation_style", "science"),
+                                 (getattr(opt, "out_dir", "") or "").strip() or None)
     ctx = {"wcs": res.wcs, "full_w": img.width, "full_h": img.height,
            "rotation": res.stats.get("rotation"), "target": opt.target,
            "matched": res.stats.get("matched"), "date": __import__("time").strftime("%Y-%m-%d")}

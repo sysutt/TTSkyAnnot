@@ -4181,7 +4181,8 @@ class MainWindow(QMainWindow):
         res = self.results.get(self.current)
         if not res or not res.ok:
             return
-        path = res.outputs.get("preview") or (os.path.splitext(res.image)[0] + ".annotated.jpg")
+        path = res.outputs.get("preview") or run.preview_path(
+            res.image, self.cfg.get("annotation_style", "science"))
         try:
             img = imageio.load(res.image, want_debayer=self.cfg.get("debayer", True), pattern="")
             opt = replace(self._last_opt or run.Options(), write_preview=True,
