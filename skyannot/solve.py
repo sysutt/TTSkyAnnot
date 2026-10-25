@@ -248,7 +248,9 @@ def solve_astap(display_rgb, hint=None, exe=None, log=print, timeout=180):
         if hint.get("ra") is not None and hint.get("dec") is not None:
             args += ["-ra", "%.5f" % (hint["ra"] / 15.0), "-spd", "%.5f" % (hint["dec"] + 90.0)]
         if hint.get("pixscale"):
-            fov = hint["pixscale"] * lum.shape[0] / 3600.0
+            # -fov is the field WIDTH in degrees: it must come from the long side, not the height, or a
+            # landscape frame gets a field too small for its scale and ASTAP searches the wrong place
+            fov = hint["pixscale"] * max(lum.shape) / 3600.0
             args += ["-fov", "%.4f" % fov]
         else:
             args += ["-fov", "0"]

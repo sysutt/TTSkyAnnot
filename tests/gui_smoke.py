@@ -1238,8 +1238,10 @@ def main():
 
     # the catalogue cards live in a scroller; its bottom edge is the end of the annotation group
     last_dso = win.catalogue_scroll
+    _left = win.dock_files.widget()
+    check("the history queue lives in the left dock with the files",
+          win.list in _left.findChildren(type(win.list)), "ok")
     gaps = [
-        ("the target group starts below the queue", _span(win.lbl_target)[0] - _span(win.list)[1]),
         ("the star catalogues sit below the target group", _span(win.lbl_cats)[0] - _span(win.ed_coord)[1]),
         ("the annotation group follows the star catalogues", _span(win.lbl_anno)[0] - _span(win.lbl_named)[1]),
         ("the display group follows the annotation group", _span(win.lbl_shape)[0] - _span(last_dso)[1]),
