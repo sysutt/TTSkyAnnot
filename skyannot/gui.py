@@ -1350,7 +1350,7 @@ class ImageView(QGraphicsView):
                     it.setParentItem(self.overlay)
                 polys, closed = [], False
                 anchors = [(e["x"], e["y"], None)] if e.get("label") else []
-                text = (e.get("name") if style.theme().get("label_mode") == "name" else e.get("label")) or ""
+                text = _ascii_label(e.get("name") or e.get("label") or "")
                 if anchors and text:
                     labels.append((0, anchors, text, col, font, 14, None))
                 continue
@@ -1370,7 +1370,7 @@ class ImageView(QGraphicsView):
                 self._marker(e["x"], e["y"], 6, col)
             anchors = style.label_anchors(e, W, H, polys) if e.get("label") else []
             if anchors:
-                text = (e.get("name") if style.theme().get("label_mode") == "name" else e["label"]) or ""
+                text = _ascii_label(e.get("name") or e.get("label") or "")
                 prio = 0 if text[:1] == "M" and text[1:2].isdigit() else 1
                 # a big object's name goes in the middle of its own shape (a huge circle labelled at its rim
                 # reads as a label for the sky beside it); small ones keep their label outside
@@ -4613,6 +4613,13 @@ def _paint_title_bar(win, dark: bool = True) -> None:
                                           SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER)
     except Exception:
         pass
+
+
+def _ascii_label(text):
+    """The overlay fonts carry no Chinese glyphs; keep the catalogue id and the Latin name only."""
+    import re
+    s = re.sub(r"[\u3000-\u303f\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]+", " ", str(text or ""))
+    return re.sub(r"\s+", " ", s).strip(" -·|")
 
 
 def _north_angle(wcs, w, h):
