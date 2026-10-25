@@ -483,7 +483,12 @@ def solve(image_path: str, opt: Options, log=print, progress=lambda p, msg: None
             except Exception as e:                     # wrong or failed solve -> next solver
                 errors.append("%s: %s" % (name, e))
                 log("  %s failed: %s" % (name, e))
-        if wcs is None and opt.remote_fallback:
+        weak = bool(wcs is not None and not stats.get("remote") and (stats.get("matched") or 0) < 12)
+        if weak:
+            # a solution where only a handful of catalogue stars line up is usually a wrong match (it can
+            # even be rotated 180 degrees); it must not be trusted just because the solver returned it
+            log("  本地方案只有 %d 颗参考星吻合，改用缩略图接口复核…" % (stats.get("matched") or 0))
+        if (wcs is None or weak) and opt.remote_fallback:
             # The local solvers need a FITS header or a Messier field nearby; a thumbnail upload lets the
             # service extract its own stars and race its astrometry.net against nova. Slow (minutes) but it
             # is the only path for arbitrary screenshots and processed pictures.
