@@ -855,8 +855,12 @@ class _LabelText(QGraphicsSimpleTextItem):
         painter.setRenderHint(QPainter.Antialiasing, True)
         pen = QPen(self._line, 0.8)
         pen.setCosmetic(True)
-        painter.setPen(pen)
-        painter.setBrush(QColor(2, 4, 10, 168))
+        if style.theme().get("label_bg") == "cream":
+            pen = QPen(QColor(58, 38, 30, 170), 0.8)
+            painter.setPen(pen)
+            painter.setBrush(QColor(236, 222, 190, 210))
+        else:
+            painter.setBrush(QColor(2, 4, 10, 168))
         painter.drawRoundedRect(chip, 3.5, 3.5)
         super().paint(painter, option, widget)
 
@@ -1296,9 +1300,12 @@ class ImageView(QGraphicsView):
         W = int(round(self.overlay.rect().width())) or self.pix.pixmap().width()
         H = int(round(self.overlay.rect().height())) or self.pix.pixmap().height()
         s = self.transform().m11() or 1.0
-        font = QFont("Segoe UI", 9, QFont.DemiBold)
-        sfont = QFont("Segoe UI", 9)
-        gfont = QFont("Segoe UI", 8)
+        _fam = style.theme().get("font") or "sans"
+        _qfam = {"mono": "Consolas", "serif": "Georgia", "script": "Segoe Script"}.get(_fam, "Segoe UI")
+        font = QFont(_qfam, 9, QFont.DemiBold)
+        sfont = QFont(_qfam, 9)
+        gfont = QFont(_qfam, 8)
+        _lw = 1.6 * float(style.theme().get("line_scale") or 1.0)
         gcol = QColor(style.grid_color())
         lcol = QColor(gcol)
         lcol.setAlphaF(style.grid_alpha())
@@ -1321,12 +1328,27 @@ class ImageView(QGraphicsView):
                 it.setPos(ox, oy)                                       # keep the label inside the frame
                 grid_boxes.append((x + ox / s, y + oy / s, x + (ox + r.width()) / s, y + (oy + r.height()) / s))
         labels = []
+        _shape_mode = style.theme().get("shape_mode") or "outline"
         for e in shapes or []:
-            if categories is not None and e.get("category") not in categories:
+            if categories is not None and not (e.get("category") in categories
+                                               or e.get("type_group") in categories):
                 continue
             col = QColor(style.color_for(e))
-            pen = QPen(col, 1.6)
+            pen = QPen(col, _lw)
             pen.setCosmetic(True)
+            if _shape_mode == "x" and e.get("x") is not None:
+                r = 9.0
+                for (x0, y0, x1, y1) in ((e["x"] - r, e["y"] - r, e["x"] + r, e["y"] + r),
+                                         (e["x"] - r, e["y"] + r, e["x"] + r, e["y"] - r)):
+                    it = QGraphicsLineItem(x0, y0, x1, y1)
+                    it.setPen(pen)
+                    it.setParentItem(self.overlay)
+                polys, closed = [], False
+                anchors = [(e["x"], e["y"], None)] if e.get("label") else []
+                text = (e.get("name") if style.theme().get("label_mode") == "name" else e.get("label")) or ""
+                if anchors and text:
+                    labels.append((0, anchors, text, col, font, 14, None))
+                continue
             polys, closed = shapes_mod.display_polygons(e, shape_style)
             for poly in polys:
                 if len(poly) < 2:
@@ -1343,11 +1365,12 @@ class ImageView(QGraphicsView):
                 self._marker(e["x"], e["y"], 6, col)
             anchors = style.label_anchors(e, W, H, polys) if e.get("label") else []
             if anchors:
-                prio = 0 if e["label"][:1] == "M" and e["label"][1:2].isdigit() else 1
+                text = (e.get("name") if style.theme().get("label_mode") == "name" else e["label"]) or ""
+                prio = 0 if text[:1] == "M" and text[1:2].isdigit() else 1
                 # a big object's name goes in the middle of its own shape (a huge circle labelled at its rim
                 # reads as a label for the sky beside it); small ones keep their label outside
                 inside = style.inside_anchor(polys)
-                labels.append((prio, anchors, e["label"], col, font,
+                labels.append((prio, anchors, text, col, font,
                                6 if e.get("kind") == "point" else 0, inside))
         for r in (named or []) if show_named else []:
             col = QColor(style.star_color())
