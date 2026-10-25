@@ -136,13 +136,14 @@ def render(display_rgb, shapes, named_rows, out_path, max_edge=4000, quality=92,
             lim_x, lim_y = 4.0 * OW, 4.0 * OH
             pts = [(min(max(x, -lim_x), 2 * lim_x), min(max(y, -lim_y), 2 * lim_y)) for x, y in pts]
             if tstyle.get("sketch"):
-                # Hand-drawn look: three passes over the same outline. Each pass wanders along the line (a
-                # smoothed random walk, so the stroke bends instead of buzzing), the thin passes are offset
-                # further and are drawn in broken runs, which opens the gaps a pencil sketch has.
+                # Hand-drawn look. There is no solid stroke at all: every pass is a broken run of jittered
+                # points that wanders along the outline (a smoothed random walk, so the stroke bends instead
+                # of buzzing). The first pass is nearly continuous but still wobbly; the thin passes are
+                # offset much further and open wide gaps, which is where the pencil-sketch look comes from.
                 import random as _rnd
-                base_amp = max(2.0 * SS, edge / 420.0)
-                passes = ((max(2, lw), 1.0, 0.0), (max(1, lw // 2), 3.8, 0.55), (max(1, lw // 3), 7.2, 0.78))
-                for wid, amp_k, skip in passes:
+                base_amp = max(2.0 * SS, edge / 380.0)
+                for wid, amp_k, dense in ((max(2, lw), 1.8, 0.45), (max(1, lw // 2), 4.2, 0.70),
+                                          (max(1, lw // 3), 7.5, 0.90)):
                     amp = base_amp * amp_k
                     j, ox, oy = [], 0.0, 0.0
                     for (x, y) in pts:
@@ -151,22 +152,38 @@ def render(display_rgb, shapes, named_rows, out_path, max_edge=4000, quality=92,
                         j.append((x + ox, y + oy))
                     if closed and j:
                         j.append(j[0])
-                    if skip <= 0 or len(j) < 4:
+                    if len(j) < 4:
                         pen.line(j, fill=col, width=wid)
                         continue
+                    run_hi = max(3, int(len(j) * (0.25 - 0.15 * dense)))
+                    run_lo = max(2, int(run_hi * 0.35))
+                    gap_lo = 1 + int(3 * dense)
+                    gap_hi = 2 + int(7 * dense)
                     i = 0
                     while i < len(j) - 1:
-                        run = _rnd.randint(2, max(3, len(j) // 5))
+                        run = _rnd.randint(run_lo, run_hi)
                         seg = j[i:i + run + 1]
                         if len(seg) >= 2:
                             pen.line(seg, fill=col, width=wid)
-                        i += run + _rnd.randint(2, 7)
+                        i += run + _rnd.randint(gap_lo, gap_hi)
             else:
                 pen.line(pts + [pts[0]] if closed else pts, fill=col, width=lw)
         if e.get("kind") == "point":
             x, y = e["x"] * ks, e["y"] * ks
             r = 6 * lw
-            dr.ellipse([x - r, y - r, x + r, y + r], outline=col, width=lw)
+            if tstyle.get("sketch"):
+                # the same hand-drawn treatment: loose rings instead of a drawn circle
+                import math as _m, random as _rnd
+                for p_i in range(2):
+                    rr = r * (1.0 + 0.22 * p_i)
+                    ring = []
+                    for k in range(37):
+                        a = 2 * _m.pi * k / 36
+                        ring.append((x + rr * _m.cos(a) + _rnd.uniform(-2.0, 2.0) * SS,
+                                     y + rr * _m.sin(a) + _rnd.uniform(-2.0, 2.0) * SS))
+                    dr.line(ring, fill=col, width=max(1, lw // 2))
+            else:
+                dr.ellipse([x - r, y - r, x + r, y + r], outline=col, width=lw)
         anchors = style.label_anchors(e, w, h, polys) if e.get("label") else []
         if anchors:
             gap = 6 * lw + 3 * SS if e.get("kind") == "point" else 3 * lw
