@@ -61,6 +61,39 @@ THEMES = {
                         "other": (200.0, 0.40, 0.95)},
              "star": "#FFFFFF", "grid": "#2A6F7A"},
 }
+THEMES.update({
+    "plate": {"label": "天文台图版", "chip": False, "glow": False, "font": "mono", "line_scale": 0.9,
+              "label_mode": "full", "grid_alpha": 0.0, "decor": "plate",
+              "family": {"galaxy": (210.0, 0.10, 0.98), "nebula": (210.0, 0.10, 0.98),
+                         "cluster": (210.0, 0.10, 0.98), "dark": (210.0, 0.10, 0.90),
+                         "other": (210.0, 0.10, 0.90)},
+              "single": "#E4ECF8", "star": "#FFFFFF", "grid": "#8FA9C8"},
+    "journal": {"label": "观测手记", "chip": False, "glow": False, "font": "script", "line_scale": 1.5,
+                "label_mode": "name", "grid_alpha": 0.0, "decor": "journal", "sketch": True,
+                "family": {"galaxy": (32.0, 0.55, 0.80), "nebula": (200.0, 0.25, 0.80),
+                           "cluster": (45.0, 0.50, 0.85), "dark": (275.0, 0.25, 0.75),
+                           "other": (35.0, 0.20, 0.75)},
+                "single": "#E8D9B8", "star": "#F2E6C8", "grid": "#C9A86A"},
+    "neon_hud": {"label": "霓虹 HUD", "chip": False, "glow": True, "font": "mono", "line_scale": 1.6,
+                 "label_mode": "full", "grid_alpha": 0.22, "decor": "neon", "darken": 0.90,
+                 "family": {"galaxy": (325.0, 0.85, 1.00), "nebula": (185.0, 1.00, 1.00),
+                            "cluster": (55.0, 0.95, 1.00), "dark": (270.0, 0.90, 1.00),
+                            "other": (200.0, 0.40, 0.95)},
+                 "single": None, "star": "#FFFFFF", "grid": "#2A6F7A"},
+    "nav": {"label": "星际导航", "chip": False, "glow": False, "font": "mono", "line_scale": 1.0,
+            "label_mode": "full", "grid_alpha": 0.0, "decor": "nav", "tint": (0.90, 0.96, 1.00),
+            "family": {"galaxy": (38.0, 0.60, 1.00), "nebula": (165.0, 0.65, 1.00),
+                       "cluster": (38.0, 0.60, 1.00), "dark": (165.0, 0.55, 0.95),
+                       "other": (165.0, 0.35, 0.90)},
+            "single": None, "star": "#D8F4FF", "grid": "#3A6B7A"},
+    "treasure": {"label": "寻宝图", "chip": False, "glow": False, "font": "script", "line_scale": 1.4,
+                 "label_mode": "name", "grid_alpha": 0.0, "decor": "treasure", "shape_mode": "x",
+                 "tint_sepia": 0.03, "label_bg": "cream",
+                 "family": {"galaxy": (32.0, 0.40, 0.55), "nebula": (210.0, 0.15, 0.55),
+                            "cluster": (45.0, 0.35, 0.60), "dark": (270.0, 0.20, 0.55),
+                            "other": (30.0, 0.15, 0.55)},
+                 "single": "#3A2612", "star": "#F2E6C8", "grid": "#C9A86A"},
+})
 _ACTIVE = THEMES["science"]
 
 
@@ -141,6 +174,9 @@ def color_for(entry) -> str:
     but two nebulae side by side are no longer the same cyan — each name gets its own shade in the family, so
     a crowded field reads as many objects rather than one flat colour.
     """
+    single = _ACTIVE.get("single")
+    if single:
+        return single
     key = entry.get("type_group") or entry.get("category")
     fam = _ACTIVE.get("family") or FAMILY
     if key not in fam:
