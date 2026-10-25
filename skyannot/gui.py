@@ -1277,6 +1277,10 @@ class ImageView(QGraphicsView):
         for it in self.overlay.childItems():
             self.scene().removeItem(it)
 
+    def clear_overlay(self):
+        """Drop the overlay items: the rendered preview already carries the annotations."""
+        self._clear_items()
+
     def draw_overlay(self, shapes, named, grid=None, categories=None, show_named=True, shape_style="outline"):
         """New data (a different frame, or a different set of groups): place the labels afresh."""
         self._overlay_args = (shapes, named, grid, categories, show_named, shape_style)
@@ -3562,7 +3566,10 @@ class MainWindow(QMainWindow):
 
     def _shape_changed(self):
         self.cfg["shape_style"] = self.cmb_shape.currentData()
-        self._refresh_overlay()
+        if getattr(self, "act_preview", None) is not None and self.act_preview.isChecked():
+            self._render_view_preview()
+        else:
+            self._refresh_overlay()
 
     def _bayer_changed(self):
         """Remember the choice and reload: the pattern changes how the frame is interpolated, so it has to be
@@ -3666,13 +3673,17 @@ class MainWindow(QMainWindow):
         try:
             img = imageio.load(res.image, want_debayer=self.cfg.get("debayer", True), pattern="")
             opt = replace(self._last_opt or run.Options(), write_preview=True,
-                          annotation_style=self.cfg.get("annotation_style", "science"))
+                          annotation_style=self.cfg.get("annotation_style", "science"),
+                          shape_style=self.cmb_shape.currentData(),
+                          grid="grid" in self._extras_on(), named="named" in self._extras_on(),
+                          categories=self._groups_on(), dso_cats=self._groups_on())
             p = os.path.join(tempfile.gettempdir(), "ttskyannot_preview.jpg")
             run.write_preview(img, res, opt, imageio.display_stretch(img, opt.stretch), p, max_edge=1600)
             pm = QPixmap(p)
             if not pm.isNull():
                 self._preview_pix = p
                 self.view.set_image(pm.toImage())
+                self.view.clear_overlay()
                 self.logbox.appendPlainText(t("效果预览已更新"))
         except Exception as e:
             self.logbox.appendPlainText("%s %s" % (t("效果预览失败："), e))
@@ -3693,6 +3704,9 @@ class MainWindow(QMainWindow):
             self.logbox.appendPlainText(t("标注风格已切换：点「只存标注图」可按新风格重存，不必导出全部文件。"))
 
     def _refresh_overlay(self):
+        if getattr(self, "act_preview", None) is not None and self.act_preview.isChecked():
+            self.view.clear_overlay()      # the rendered preview already has the annotations
+            return
         data = self.overlay_data.get(self.current)
         if self.act_overlay.isChecked() and data:
             on, extra = self._groups_on(), self._extras_on()
@@ -4171,7 +4185,10 @@ class MainWindow(QMainWindow):
         try:
             img = imageio.load(res.image, want_debayer=self.cfg.get("debayer", True), pattern="")
             opt = replace(self._last_opt or run.Options(), write_preview=True,
-                          annotation_style=self.cfg.get("annotation_style", "science"))
+                          annotation_style=self.cfg.get("annotation_style", "science"),
+                          shape_style=self.cmb_shape.currentData(),
+                          grid="grid" in self._extras_on(), named="named" in self._extras_on(),
+                          categories=self._groups_on(), dso_cats=self._groups_on())
             p = run.write_preview(img, res, opt, imageio.display_stretch(img, opt.stretch), path)
         except Exception as e:
             QMessageBox.warning(self, "TTSkyAnnot", "%s\n\n%s" % (t("保存失败"), e))
