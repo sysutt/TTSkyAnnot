@@ -25,6 +25,7 @@ class Options:
     target_radec: tuple = ()         # its catalogued position, when the user picked one from the database
     target_object: dict = None       # the online record behind the target (name, position, size, type)
     remote_fallback: bool = False    # the window turns this on: upload an 800 px thumbnail when all solvers fail
+    annotation_style: str = "science"  # overlay/annotated-image theme
     solve_image_url: str = ""        # defaults to the ttastro direct endpoint
     solve_result_url: str = ""
     guess_target_from_name: bool = True   # read the target out of the file/folder name when there is no hint
@@ -277,7 +278,7 @@ def write_outputs(img, res: Result, opt: Options, display_rgb=None, log=print) -
         render.render(display_rgb if display_rgb is not None else imageio.display_stretch(img, opt.stretch),
                       res.shapes, res.named if opt.named else None, p,
                       grid_lines=res.grid if opt.grid else None, categories=set(opt.categories),
-                      shape_style=opt.shape_style)
+                      shape_style=opt.shape_style, theme_name=opt.annotation_style)
         res.outputs["preview"] = p
     if opt.write_wcs:
         try:

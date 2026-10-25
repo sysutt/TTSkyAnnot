@@ -34,6 +34,7 @@ DEFAULTS = {
     "nova_api_key": "",          # no longer used: nova runs server-side now
     "solve_image_url": "https://ttastro.com/api/i/solve_image",
     "solve_result_url": "https://ttastro.com/api/i/solve_result",
+    "annotation_style": "science",
     "astap_path": "",
     "pixinsight_path": "",    # "" = look for PixInsight in the usual install location
     "gaia_mag": 16.0,
