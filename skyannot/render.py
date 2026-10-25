@@ -46,6 +46,15 @@ def _font(size, bold=False, family="sans"):
     return ImageFont.load_default(size=size)
 
 
+def _ascii_label(text):
+    """Labels are drawn with fonts that carry no Chinese glyphs (Consolas, Georgia, Segoe Script), so a
+    Chinese catalogue name comes out as a row of boxes. Keep the catalogue id and any Latin name, drop the
+    Chinese part entirely — the same rule for every style."""
+    import re
+    s = re.sub(r"[\u3000-\u303f\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]+", " ", str(text or ""))
+    s = re.sub(r"\s+", " ", s).strip(" -·|")
+    return s
+
 def render(display_rgb, shapes, named_rows, out_path, max_edge=4000, quality=92, grid_lines=None,
            categories=None, shape_style="outline", theme_name=None, ctx=None):
     """display_rgb: (h, w, 3) in [0, 1]. shapes: shapes.collect() output. named_rows: annotate.Row list of
@@ -202,7 +211,7 @@ def render(display_rgb, shapes, named_rows, out_path, max_edge=4000, quality=92,
             ins = style.inside_anchor(polys)
             if ins is not None:
                 ins = (ins[0] * ks, ins[1] * ks, ins[2] * ks, ins[3] * ks)
-            text = e.get("name") or e["label"] if tstyle.get("label_mode") == "name" else e["label"]
+            text = _ascii_label(e.get("name") or e["label"])
             labels.append(([(x * ks, y * ks, u) for x, y, u in anchors], text, col, font, gap, ins))
     if glow is not None:
         gl = glow.resize((W2, H2), Image.LANCZOS).filter(__import__("PIL.ImageFilter", fromlist=["ImageFilter"]).GaussianBlur(max(2, int(edge / 900))))
