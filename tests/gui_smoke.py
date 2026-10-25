@@ -2496,6 +2496,21 @@ def main():
         tickwhale.search = real_search
     check("an online-only name in the folder is recognised",
           bool(g2) and g2[0] == "LBN777" and g2[2] is not None, str(g2[:2]))
+    # every annotation theme must render a labelled picture (the theme dict used to be shadowed by the text
+    # height inside the label loop, which raised AttributeError as soon as a chip was drawn)
+    from skyannot import render as render_mod2                     # noqa: E402
+    import tempfile as _tf2                                        # noqa: E402
+    _td2 = _tf2.mkdtemp(prefix="tts_theme_")
+    tiny2 = np.full((200, 300, 3), 0.2, np.float32)
+    shp2 = [{"kind": "outline", "category": "nebula", "type_group": "nebula", "name": "LBN777",
+             "label": "LBN777 LBN 777", "x": 150, "y": 120,
+             "polygons": [[(100, 100), (200, 100), (200, 150), (100, 150)]]}]
+    for _th in ("science", "minimal", "vintage", "neon"):
+        _p2 = os.path.join(_td2, "theme_%s.jpg" % _th)
+        render_mod2.render(tiny2, shp2, [], _p2, theme_name=_th, shape_style="outline")
+        check("the %s theme renders a labelled picture" % _th,
+              os.path.exists(_p2) and os.path.getsize(_p2) > 500, _p2)
+
     # the remote image fallback: upload a thumbnail, poll, and rebuild the WCS at full resolution
     class _Resp2:
         def __init__(self, obj):
