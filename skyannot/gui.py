@@ -4181,8 +4181,10 @@ class MainWindow(QMainWindow):
         res = self.results.get(self.current)
         if not res or not res.ok:
             return
-        path = res.outputs.get("preview") or run.preview_path(
-            res.image, self.cfg.get("annotation_style", "science"))
+        # 预览图始终跟着当前打开的文件走（除非在设置里指定了全局输出目录），
+        # 不要沿用上一次保存对话框选择过的目录
+        out_dir = (self.cfg.get("out_dir") or "").strip() or None
+        path = run.preview_path(res.image, self.cfg.get("annotation_style", "science"), out_dir)
         try:
             img = imageio.load(res.image, want_debayer=self.cfg.get("debayer", True), pattern="")
             opt = replace(self._last_opt or run.Options(), write_preview=True,
