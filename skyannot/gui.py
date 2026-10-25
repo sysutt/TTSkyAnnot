@@ -2845,8 +2845,27 @@ class MainWindow(QMainWindow):
         self.file_list.customContextMenuRequested.connect(
             lambda pos: self._list_menu(pos, self.file_list))
         lay.addWidget(self.file_list, 1)
+        line = QFrame()
+        line.setFrameShape(QFrame.HLine)
+        line.setStyleSheet("QFrame{color:%s}" % C["border"])
+        lay.addWidget(line)
+        # the history queue lives here now: the left column is the picture list plus the queue, and the right
+        # column is about the annotation itself
+        self.lbl_queue = QLabel(t("打开历史"))
+        self.lbl_queue.setStyleSheet(SUBTITLE_QSS)
+        self.lbl_queue.setToolTip(t("打开过的图片会按顺序记在这里，之后可以一起解析；在左栏点选或翻页看过的图"
+                                    "也会自动加进来"))
+        lay.addWidget(self.lbl_queue)
+        self.list = QListWidget()
+        self.list.setSelectionMode(QAbstractItemView.ExtendedSelection)
+        self.list.setStyleSheet(_list_qss(self))
+        self.list.currentRowChanged.connect(self._row_changed)
+        self.list.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.list.customContextMenuRequested.connect(lambda pos: self._list_menu(pos, self.list))
+        self.list.setMinimumHeight(2 * _list_row_height(self.list) + 8)
+        lay.addWidget(self.list, 1)
         dock.setWidget(w)
-        dock.setMinimumWidth(268)                  # wide enough for the rows without a scroll bar
+        dock.setMinimumWidth(220)                  # the rows fit; the panel should not eat the picture area
         self.addDockWidget(Qt.LeftDockWidgetArea, dock)
         self.dock_files = dock
         self._files_width = dock.sizeHint().width()
@@ -2945,22 +2964,6 @@ class MainWindow(QMainWindow):
         lay = QVBoxLayout(w)
         lay.setContentsMargins(8, 8, 8, 8)
         lay.setSpacing(5)
-
-        # the queue: the one element that shouts, because it is what the panel is for
-        self.lbl_queue = QLabel(t("打开历史"))
-        self.lbl_queue.setStyleSheet(SUBTITLE_QSS)
-        self.lbl_queue.setToolTip(t("打开过的图片会按顺序记在这里，之后可以一起解析；在左栏点选或翻页看过的图"
-                                    "也会自动加进来"))
-        lay.addWidget(self.lbl_queue)
-        self.list = QListWidget()
-        self.list.setSelectionMode(QAbstractItemView.ExtendedSelection)
-        self.list.setStyleSheet(_list_qss(self))
-        self.list.currentRowChanged.connect(self._row_changed)
-        self.list.setContextMenuPolicy(Qt.CustomContextMenu)
-        self.list.customContextMenuRequested.connect(lambda pos: self._list_menu(pos, self.list))
-        self.list.setMinimumHeight(2 * _list_row_height(self.list) + 8)
-        lay.addWidget(self.list, 5)                # the queue takes the panel's spare height
-        lay.addSpacing(4)                          # air between the queue and the first caption
 
         # everything below is added in order to this column; the layout is placed once, here
         self.controls = QVBoxLayout()
@@ -3684,6 +3687,7 @@ class MainWindow(QMainWindow):
             self._render_view_preview()
         else:
             self._refresh_overlay()
+        self._update_save_button()          # the preview-only button follows "is there a solved frame"
         res = self.results.get(self.current)
         if res and res.ok:
             self.logbox.appendPlainText(t("标注风格已切换：点「只存标注图」可按新风格重存，不必导出全部文件。"))
@@ -4083,6 +4087,7 @@ class MainWindow(QMainWindow):
             self.results[res.image] = res
             self.btn_folder.setEnabled(True)
             self._last_out = next(iter(res.outputs.values()), res.image)
+            self._update_save_button()
             if res.image == self.current:
                 # the solved centre goes into the coordinate box, so the next run of this frame starts
                 # from a known position instead of solving blind again
