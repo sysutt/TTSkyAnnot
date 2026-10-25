@@ -3179,6 +3179,11 @@ class MainWindow(QMainWindow):
         row.addWidget(self.btn_save)
         row.addWidget(self.btn_pi)
         lay.addLayout(row)
+        self.btn_preview = QPushButton(t("只存标注图"))
+        self.btn_preview.setToolTip(t("按当前标注风格重新生成标注图，其它文件不动"))
+        self.btn_preview.clicked.connect(self.save_preview_only)
+        self.btn_preview.setEnabled(False)
+        lay.addWidget(self.btn_preview)
 
         self.prog = QProgressBar()
         self.prog.setRange(0, 1000)
@@ -3617,6 +3622,9 @@ class MainWindow(QMainWindow):
         self.cfg["annotation_style"] = key
         config.save(self.cfg)
         self._refresh_overlay()
+        res = self.results.get(self.current)
+        if res and res.ok:
+            self.logbox.appendPlainText(t("标注风格已切换：点「只存标注图」可按新风格重存，不必导出全部文件。"))
 
     def _refresh_overlay(self):
         data = self.overlay_data.get(self.current)
@@ -4077,9 +4085,29 @@ class MainWindow(QMainWindow):
             return
         n = len(self._unsaved)
         self.btn_save.setEnabled(bool(self.current) and self.current in self._unsaved)
+        if hasattr(self, "btn_preview"):
+            res = self.results.get(self.current)
+            self.btn_preview.setEnabled(bool(res and res.ok))
         self.btn_save.setText(t("保存当前结果") if n <= 1 else "%s (%d)" % (t("保存结果"), n))
         self.btn_save.setToolTip(t("把这张图的解析结果写到磁盘（解析本身不写任何文件）")
                                  if not n else "%s：%d %s" % (t("还没保存的结果"), n, t("张")))
+
+    def save_preview_only(self):
+        """Re-render the annotated picture with the current style: the lists and outlines are left alone."""
+        res = self.results.get(self.current)
+        if not res or not res.ok:
+            return
+        path = res.outputs.get("preview") or (os.path.splitext(res.image)[0] + ".annotated.jpg")
+        try:
+            img = imageio.load(res.image, want_debayer=self.cfg.get("debayer", True), pattern="")
+            opt = replace(self._last_opt or run.Options(), write_preview=True,
+                          annotation_style=self.cfg.get("annotation_style", "science"))
+            p = run.write_preview(img, res, opt, imageio.display_stretch(img, opt.stretch), path)
+        except Exception as e:
+            QMessageBox.warning(self, "TTSkyAnnot", "%s\n\n%s" % (t("保存失败"), e))
+            return
+        self.logbox.appendPlainText("%s %s" % (t("标注图已更新："), p))
+        self._last_out = p
 
     def save_current(self):
         """Write the results of the picture on screen: the way back for a solve that was not saved."""

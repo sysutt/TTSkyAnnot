@@ -2505,7 +2505,7 @@ def main():
     shp2 = [{"kind": "outline", "category": "nebula", "type_group": "nebula", "name": "LBN777",
              "label": "LBN777 LBN 777", "x": 150, "y": 120,
              "polygons": [[(100, 100), (200, 100), (200, 150), (100, 150)]]}]
-    for _th in ("science", "minimal", "vintage", "neon"):
+    for _th in ("science", "minimal", "vintage", "neon", "plate", "journal", "neon_hud", "nav", "treasure"):
         _p2 = os.path.join(_td2, "theme_%s.jpg" % _th)
         render_mod2.render(tiny2, shp2, [], _p2, theme_name=_th, shape_style="outline")
         check("the %s theme renders a labelled picture" % _th,

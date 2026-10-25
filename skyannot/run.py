@@ -252,6 +252,25 @@ def output_paths(path: str, opt: Options) -> list:
     return out
 
 
+def write_preview(img, res, opt, display_rgb=None, out_path=None):
+    """Render only the annotated picture — the way back after switching the style, without re-writing the
+    lists and outlines that have not changed."""
+    p = out_path or (os.path.splitext(res.image)[0] + ".annotated.jpg")
+    ctx = {"wcs": res.wcs, "full_w": img.width, "full_h": img.height,
+           "rotation": res.stats.get("rotation"), "target": opt.target,
+           "matched": res.stats.get("matched"), "date": __import__("time").strftime("%Y-%m-%d")}
+    try:
+        cd = res.wcs.wcs.cd
+        ctx["pixscale"] = float(abs(cd[0][0] * cd[1][1] - cd[0][1] * cd[1][0]) ** 0.5) * 3600.0
+    except Exception:
+        pass
+    render.render(display_rgb if display_rgb is not None else imageio.display_stretch(img, opt.stretch),
+                  res.shapes, res.named if opt.named else None, p,
+                  grid_lines=res.grid if opt.grid else None, categories=set(opt.categories),
+                  shape_style=opt.shape_style, theme_name=opt.annotation_style, ctx=ctx)
+    return p
+
+
 def write_outputs(img, res: Result, opt: Options, display_rgb=None, log=print) -> dict:
     """Write everything the options ask for. Separate from process() so the caller can ask the user first:
     nothing is written anywhere until this is called."""
@@ -274,11 +293,7 @@ def write_outputs(img, res: Result, opt: Options, display_rgb=None, log=print) -
             json.dump(doc, f, ensure_ascii=False, indent=1)
         res.outputs["outlines"] = p
     if opt.write_preview:
-        p = stem + ".annotated.jpg"
-        render.render(display_rgb if display_rgb is not None else imageio.display_stretch(img, opt.stretch),
-                      res.shapes, res.named if opt.named else None, p,
-                      grid_lines=res.grid if opt.grid else None, categories=set(opt.categories),
-                      shape_style=opt.shape_style, theme_name=opt.annotation_style)
+        p = write_preview(img, res, opt, display_rgb)
         res.outputs["preview"] = p
     if opt.write_wcs:
         try:
