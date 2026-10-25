@@ -27,6 +27,7 @@ from PyQt5.QtCore import (QEasingCurve, QEvent, QPointF, QProcess, QPropertyAnim
 from PyQt5.QtGui import (QBrush, QColor, QDesktopServices, QFont, QFontMetrics, QIcon, QImage, QKeySequence, QPainter,
                          QPainterPath, QPalette, QPen, QPixmap, QPolygonF)
 from PyQt5.QtWidgets import (QAbstractButton, QAbstractItemView, QAction, QApplication, QCheckBox, QComboBox,
+                             QGraphicsLineItem,
                              QCompleter,
                              QDialog,
                              QDialogButtonBox, QDockWidget, QDoubleSpinBox, QFileDialog, QFormLayout, QFrame,
