@@ -172,19 +172,19 @@ def render(display_rgb, shapes, named_rows, out_path, max_edge=4000, quality=92,
                 # the same scribble for a small object: three overlapping pen circles, each a full turn plus
                 # an overshoot, with a slightly different radius and centre
                 import math as _m, random as _rnd
-                for wid, amp_k in ((max(2, lw), 1.0), (max(1, lw // 2), 2.0), (max(1, lw // 2), 3.0)):
-                    rr = r * _rnd.uniform(0.90, 1.16)
-                    cx = x + _rnd.uniform(-0.14, 0.14) * r
-                    cy = y + _rnd.uniform(-0.14, 0.14) * r
+                for wid, amp_k in ((max(2, lw), 1.0), (max(1, lw // 2), 1.6)):
+                    rr = r * _rnd.uniform(0.96, 1.06)
+                    cx = x + _rnd.uniform(-0.06, 0.06) * r
+                    cy = y + _rnd.uniform(-0.06, 0.06) * r
                     a0 = _rnd.uniform(0, 2 * _m.pi)
-                    sweep = 2 * _m.pi * _rnd.uniform(1.02, 1.2)
+                    sweep = 2 * _m.pi * _rnd.uniform(1.02, 1.10)
                     steps = 40
                     ring = []
                     ox = oy = 0.0
                     for k in range(steps + 1):
                         a = a0 + sweep * k / steps
-                        ox = ox * 0.5 + _rnd.uniform(-1.6, 1.6) * SS * amp_k * 0.5
-                        oy = oy * 0.5 + _rnd.uniform(-1.6, 1.6) * SS * amp_k * 0.5
+                        ox = ox * 0.5 + _rnd.uniform(-1.0, 1.0) * SS * amp_k * 0.5
+                        oy = oy * 0.5 + _rnd.uniform(-1.0, 1.0) * SS * amp_k * 0.5
                         ring.append((cx + rr * _m.cos(a) + ox, cy + rr * _m.sin(a) + oy))
                     dr.line(ring, fill=col, width=wid)
             else:
