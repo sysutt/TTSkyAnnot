@@ -22,8 +22,21 @@ _BOLD_FONTS = (r"C:\Windows\Fonts\msyhbd.ttc", r"C:\Windows\Fonts\simhei.ttf",
 SS = 2            # the overlay is drawn at twice the size and scaled down: smooth, anti-aliased curves
 
 
-def _font(size, bold=False):
+def _font(size, bold=False, family="sans"):
     from PIL import ImageFont
+    if family == "serif":
+        cands = (r"C:\Windows\Fonts\georgia.ttf", r"C:\Windows\Fonts\times.ttf",
+                 "/System/Library/Fonts/Times.ttc", "/usr/share/fonts/truetype/dejavu/DejaVuSerif.ttf")
+    elif family == "mono":
+        cands = (r"C:\Windows\Fonts\consola.ttf", "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf")
+    else:
+        cands = ()
+    for f in cands:
+        if os.path.exists(f):
+            try:
+                return ImageFont.truetype(f, size)
+            except OSError:
+                pass
     for f in (_BOLD_FONTS if bold else ()) + _FONTS:
         if os.path.exists(f):
             try:
@@ -34,13 +47,16 @@ def _font(size, bold=False):
 
 
 def render(display_rgb, shapes, named_rows, out_path, max_edge=4000, quality=92, grid_lines=None,
-           categories=None, shape_style="outline"):
+           categories=None, shape_style="outline", theme_name=None):
     """display_rgb: (h, w, 3) in [0, 1]. shapes: shapes.collect() output. named_rows: annotate.Row list of
     named stars (None or [] = no star labels). grid_lines: grid.compute() output (None = no grid).
     categories: object groups to draw (None = all). shape_style: "outline" or "circle" (catalogue size, see
     shapes.display_polygons). Pixel inputs are in PixInsight convention at full
     resolution."""
     from PIL import Image, ImageDraw
+    if theme_name:
+        style.set_theme(theme_name)
+    th = style.theme()
     h, w = display_rgb.shape[:2]
     k = min(1.0, max_edge / float(max(h, w)))
     im = Image.fromarray((np.clip(display_rgb, 0, 1) * 255).astype(np.uint8))
@@ -53,15 +69,17 @@ def render(display_rgb, shapes, named_rows, out_path, max_edge=4000, quality=92,
     ov = Image.new("RGBA", (OW, OH), (0, 0, 0, 0))
     dr = ImageDraw.Draw(ov, "RGBA")
     lw = max(2, int(round(edge / 1500))) * SS
-    font = _font(max(14, int(edge / 110)) * SS, bold=True)
-    sfont = _font(max(12, int(edge / 140)) * SS)
-    gfont = _font(max(11, int(edge / 150)) * SS)
+    lw = max(1, int(round(lw * float(th.get("line_scale") or 1.0))))
+    fam = th.get("font") or "sans"
+    font = _font(max(14, int(edge / 110)) * SS, bold=True, family=fam)
+    sfont = _font(max(12, int(edge / 140)) * SS, family=fam)
+    gfont = _font(max(11, int(edge / 150)) * SS, family=fam)
 
-    gcol = style.rgb(style.GRID_COLOR)
+    gcol = style.rgb(style.grid_color())
     grid_boxes = []                                # object labels keep clear of these
     for g in grid_lines or []:
         for seg in g["polylines"]:
-            dr.line([(x * ks, y * ks) for x, y in seg], fill=gcol + (int(255 * style.GRID_LINE_ALPHA),),
+            dr.line([(x * ks, y * ks) for x, y in seg], fill=gcol + (int(255 * style.grid_alpha()),),
                     width=max(SS, lw - SS))
     for g in grid_lines or []:
         if g.get("label_at"):
@@ -98,8 +116,9 @@ def render(display_rgb, shapes, named_rows, out_path, max_edge=4000, quality=92,
             ins = style.inside_anchor(polys)
             if ins is not None:
                 ins = (ins[0] * ks, ins[1] * ks, ins[2] * ks, ins[3] * ks)
-            labels.append(([(x * ks, y * ks, u) for x, y, u in anchors], e["label"], col, font, gap, ins))
-    star = style.rgb(style.STAR_COLOR) + (255,)
+            text = e.get("name") or e["label"] if th.get("label_mode") == "name" else e["label"]
+            labels.append(([(x * ks, y * ks, u) for x, y, u in anchors], text, col, font, gap, ins))
+    star = style.rgb(style.star_color()) + (255,)
     for r in named_rows or []:
         x, y = r.x * ks, r.y * ks
         rad = 9 * lw
@@ -137,8 +156,12 @@ def render(display_rgb, shapes, named_rows, out_path, max_edge=4000, quality=92,
         if best is None:
             continue                     # crowded patch: better one name missing than two on top of each other
         placed.append(best)
-        dr.rounded_rectangle(best, radius=3 * SS, fill=(2, 4, 10, 168),
-                             outline=col[:3] + (200,), width=max(1, int(round(SS))))
+        if th.get("chip"):
+            dr.rounded_rectangle(best, radius=3 * SS, fill=(2, 4, 10, 168),
+                                 outline=col[:3] + (200,), width=max(1, int(round(SS))))
+        if th.get("glow"):
+            dr.text((best[0] + LP, best[1] + LP), text, font=f, fill=col,
+                    stroke_width=max(1, SS), stroke_fill=col[:3] + (90,))
         dr.text((best[0] + LP, best[1] + LP), text, fill=col, font=f)
     ov = ov.resize((W2, H2), Image.LANCZOS)
     im = Image.alpha_composite(im.convert("RGBA"), ov).convert("RGB")

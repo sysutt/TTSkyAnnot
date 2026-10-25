@@ -1299,9 +1299,9 @@ class ImageView(QGraphicsView):
         font = QFont("Segoe UI", 9, QFont.DemiBold)
         sfont = QFont("Segoe UI", 9)
         gfont = QFont("Segoe UI", 8)
-        gcol = QColor(style.GRID_COLOR)
+        gcol = QColor(style.grid_color())
         lcol = QColor(gcol)
-        lcol.setAlphaF(style.GRID_LINE_ALPHA)
+        lcol.setAlphaF(style.grid_alpha())
         gpen = QPen(lcol, 1.0)
         gpen.setCosmetic(True)
         grid_boxes = []                                                 # image px; object labels avoid them
@@ -1350,7 +1350,7 @@ class ImageView(QGraphicsView):
                 labels.append((prio, anchors, e["label"], col, font,
                                6 if e.get("kind") == "point" else 0, inside))
         for r in (named or []) if show_named else []:
-            col = QColor(style.STAR_COLOR)
+            col = QColor(style.star_color())
             self._marker(r.x, r.y, 7, col)
             name = r.name + (" " + r.extra.get("common") if r.extra.get("common") else "")
             labels.append((2, [(r.x, r.y, None)], name, col, sfont, 7, None))
@@ -3110,6 +3110,18 @@ class MainWindow(QMainWindow):
         self.cmb_shape.setToolTip(t("轮廓线：有轮廓数据的星云按实际形状描边。圆圈：一律按星表尺寸画圆，长条形天体画成椭圆。"))
         self.cmb_shape.currentIndexChanged.connect(self._shape_changed)
         row.addWidget(self.cmb_shape, 1)
+        row2 = QHBoxLayout()
+        row2.addWidget(QLabel(t("标注风格")))
+        self.cmb_style = ComboBox()
+        for key, th in style.THEMES.items():
+            self.cmb_style.addItem(t(th["label"]), key)
+        self.cmb_style.setCurrentIndex(max(0, self.cmb_style.findData(
+            self.cfg.get("annotation_style", "science"))))
+        self.cmb_style.setToolTip(t("标注风格：科学（信息最全）、极简、复古星图、霓虹；只影响叠加层与标注图"))
+        self.cmb_style.currentIndexChanged.connect(self._style_changed)
+        row2.addWidget(self.cmb_style, 1)
+        lay.addLayout(row2)
+        style.set_theme(self.cfg.get("annotation_style", "science"))
         row.addSpacing(6)
         # The colours of a one-shot colour sensor, for a frame whose header does not say which arrangement it
         # used. Only meaningful for a single-channel mosaic, so it stays disabled until one is on screen.
@@ -3599,6 +3611,13 @@ class MainWindow(QMainWindow):
         if nxt is not None:
             self._start_region(nxt)
 
+    def _style_changed(self, *a):
+        key = self.cmb_style.currentData() or "science"
+        style.set_theme(key)
+        self.cfg["annotation_style"] = key
+        config.save(self.cfg)
+        self._refresh_overlay()
+
     def _refresh_overlay(self):
         data = self.overlay_data.get(self.current)
         if self.act_overlay.isChecked() and data:
@@ -3914,6 +3933,7 @@ class MainWindow(QMainWindow):
                           astap_path=self.cfg.get("astap_path", ""),
                           api_key=self.cfg.get("api_key", ""), gaia_mag=float(self.cfg.get("gaia_mag", 16)),
                           remote_fallback=bool(self.cfg.get("remote_fallback", True)),
+                          annotation_style=self.cfg.get("annotation_style", "science"),
                           solve_image_url=self.cfg.get("solve_image_url", ""),
                           solve_result_url=self.cfg.get("solve_result_url", ""),
                           cats=tuple(self.cfg["cats"]),

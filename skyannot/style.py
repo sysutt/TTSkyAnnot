@@ -35,6 +35,58 @@ GRID_COLOR = "#8FA9C8"
 GRID_LINE_ALPHA = 0.50        # grid lines stay in the background; their labels are drawn opaque
 
 
+# ── annotation themes: the same data, four moods ──────────────────────────────────────────────────────
+# "science" is the original colour-coding; the others trade information for atmosphere (the family hue is
+# still there, so a galaxy stays warm and a nebula cool, but the palette, the chip and the font change).
+THEMES = {
+    "science": {"label": "科学", "chip": True, "glow": False, "font": "sans", "line_scale": 1.0,
+                "label_mode": "full", "grid_alpha": 0.50,
+                "family": {k: v for k, v in FAMILY.items()}, "star": "#F4F6F8", "grid": "#8FA9C8"},
+    "minimal": {"label": "极简", "chip": False, "glow": False, "font": "sans", "line_scale": 0.8,
+                "label_mode": "name", "grid_alpha": 0.30,
+                "family": {"galaxy": (349.0, 0.30, 0.95), "nebula": (185.0, 0.35, 0.95),
+                           "cluster": (44.0, 0.35, 0.95), "dark": (254.0, 0.22, 0.95),
+                           "other": (212.0, 0.08, 0.90)},
+                "star": "#EDEFF2", "grid": "#6F7F93"},
+    "vintage": {"label": "复古星图", "chip": False, "glow": False, "font": "serif", "line_scale": 1.2,
+                "label_mode": "name", "grid_alpha": 0.55,
+                "family": {"galaxy": (32.0, 0.62, 0.96), "nebula": (200.0, 0.28, 0.92),
+                           "cluster": (45.0, 0.55, 0.98), "dark": (275.0, 0.25, 0.90),
+                           "other": (35.0, 0.20, 0.88)},
+                "star": "#F2E6C8", "grid": "#C9A86A"},
+    "neon": {"label": "霓虹", "chip": False, "glow": True, "font": "mono", "line_scale": 1.6,
+             "label_mode": "name", "grid_alpha": 0.22,
+             "family": {"galaxy": (325.0, 0.85, 1.00), "nebula": (185.0, 1.00, 1.00),
+                        "cluster": (55.0, 0.95, 1.00), "dark": (270.0, 0.90, 1.00),
+                        "other": (200.0, 0.40, 0.95)},
+             "star": "#FFFFFF", "grid": "#2A6F7A"},
+}
+_ACTIVE = THEMES["science"]
+
+
+def set_theme(name: str) -> str:
+    """Activate a theme by key; unknown names fall back to the scientific palette."""
+    global _ACTIVE
+    _ACTIVE = THEMES.get(str(name), THEMES["science"])
+    return _ACTIVE["label"]
+
+
+def theme() -> dict:
+    return _ACTIVE
+
+
+def grid_color() -> str:
+    return _ACTIVE["grid"]
+
+
+def star_color() -> str:
+    return _ACTIVE["star"]
+
+
+def grid_alpha() -> float:
+    return _ACTIVE["grid_alpha"]
+
+
 class Brightness:
     """Mean brightness of rectangles of the displayed picture, from a summed-area table (constant time per
     rectangle). gray: 2-D array in [0, 1]; scale: gray pixels per unit of the rectangles passed in."""
@@ -90,9 +142,10 @@ def color_for(entry) -> str:
     a crowded field reads as many objects rather than one flat colour.
     """
     key = entry.get("type_group") or entry.get("category")
-    if key not in FAMILY:
+    fam = _ACTIVE.get("family") or FAMILY
+    if key not in fam:
         key = "other"
-    h, s, v = FAMILY[key]
+    h, s, v = fam.get(key, FAMILY[key])
     seed = zlib.crc32(str(entry.get("name") or entry.get("label") or "").encode("utf-8"))
     h = (h + (seed % 17) - 8) % 360.0
     s = min(1.0, max(0.20, s + (((seed >> 9) % 11) - 5) / 100.0))
