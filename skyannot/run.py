@@ -252,7 +252,7 @@ def output_paths(path: str, opt: Options) -> list:
     return out
 
 
-def write_preview(img, res, opt, display_rgb=None, out_path=None):
+def write_preview(img, res, opt, display_rgb=None, out_path=None, max_edge=4000):
     """Render only the annotated picture — the way back after switching the style, without re-writing the
     lists and outlines that have not changed."""
     p = out_path or (os.path.splitext(res.image)[0] + ".annotated.jpg")
@@ -267,7 +267,7 @@ def write_preview(img, res, opt, display_rgb=None, out_path=None):
     render.render(display_rgb if display_rgb is not None else imageio.display_stretch(img, opt.stretch),
                   res.shapes, res.named if opt.named else None, p,
                   grid_lines=res.grid if opt.grid else None, categories=set(opt.categories),
-                  shape_style=opt.shape_style, theme_name=opt.annotation_style, ctx=ctx)
+                  shape_style=opt.shape_style, theme_name=opt.annotation_style, ctx=ctx, max_edge=max_edge)
     return p
 
 

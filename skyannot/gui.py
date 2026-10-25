@@ -2640,6 +2640,7 @@ class MainWindow(QMainWindow):
         self._loaded_path = None    # file whose picture is on screen (re-reading it cannot keep the view)
         self._view_state = None     # zoom/position captured by show_image, applied by _loaded
         self._solved_reload = False # this reload follows a solve: the frame itself is not changing
+        self._preview_pix = None    # set when the viewer shows a rendered theme preview instead of the photo
         self._slide_timer = QTimer(self)          # automatic playback: one frame per timeout
         self._slide_timer.setSingleShot(True)
         self._slide_timer.timeout.connect(self._slide_tick)
@@ -2733,6 +2734,9 @@ class MainWindow(QMainWindow):
         self.cmb_stretch.currentIndexChanged.connect(self._stretch_changed)
         tb.addWidget(self.cmb_stretch)
         tb.addSeparator()
+        self.act_preview = act(t("效果预览"), self._toggle_preview_mode, "", checkable=True)
+        self.act_preview.setToolTip(t("在当前图上按所选标注风格渲染成品效果（与导出的标注图一致）"))
+        self.act_preview.setChecked(bool(self.cfg.get("preview_mode", True)))
         self.act_overlay = act(t("显示标注"), self._toggle_overlay, "A", checkable=True)
         self.act_overlay.setChecked(bool(self.cfg.get("show_overlay", True)))
         self.act_header = act(t("文件头"), self.show_header, "H")
@@ -3640,12 +3644,46 @@ class MainWindow(QMainWindow):
         if nxt is not None:
             self._start_region(nxt)
 
+    def _toggle_preview_mode(self):
+        self.cfg["preview_mode"] = self.act_preview.isChecked()
+        config.save(self.cfg)
+        if self.act_preview.isChecked():
+            self._render_view_preview()
+        else:
+            self._preview_pix = None
+            if self.current:
+                self.show_image(self.current)
+
+    def _render_view_preview(self):
+        """Render the annotated picture at a modest size and show it: the viewer then matches the export."""
+        res = self.results.get(self.current)
+        if not res or not res.ok:
+            self.act_preview.setChecked(False)
+            return
+        try:
+            img = imageio.load(res.image, want_debayer=self.cfg.get("debayer", True), pattern="")
+            opt = replace(self._last_opt or run.Options(), write_preview=True,
+                          annotation_style=self.cfg.get("annotation_style", "science"))
+            p = os.path.join(tempfile.gettempdir(), "ttskyannot_preview.jpg")
+            run.write_preview(img, res, opt, imageio.display_stretch(img, opt.stretch), p, max_edge=1600)
+            pm = QPixmap(p)
+            if not pm.isNull():
+                self._preview_pix = p
+                self.view.set_image(pm.toImage())
+                self.logbox.appendPlainText(t("效果预览已更新"))
+        except Exception as e:
+            self.logbox.appendPlainText("%s %s" % (t("效果预览失败："), e))
+            self.act_preview.setChecked(False)
+
     def _style_changed(self, *a):
         key = self.cmb_style.currentData() or "science"
         style.set_theme(key)
         self.cfg["annotation_style"] = key
         config.save(self.cfg)
-        self._refresh_overlay()
+        if getattr(self, "act_preview", None) is not None and self.act_preview.isChecked():
+            self._render_view_preview()
+        else:
+            self._refresh_overlay()
         res = self.results.get(self.current)
         if res and res.ok:
             self.logbox.appendPlainText(t("标注风格已切换：点「只存标注图」可按新风格重存，不必导出全部文件。"))
@@ -4056,7 +4094,10 @@ class MainWindow(QMainWindow):
                 if res.wcs is not None:
                     self.wcs = res.wcs
                     self.overlay_data[res.image] = (res.shapes, res.named, res.grid)
-                    self._refresh_overlay()             # draw at once, without re-reading the picture
+                    if getattr(self, "act_preview", None) is not None and self.act_preview.isChecked():
+                        self._render_view_preview()
+                    else:
+                        self._refresh_overlay()         # draw at once, without re-reading the picture
                     try:
                         rot = st.get("rotation")
                         if rot is not None:
