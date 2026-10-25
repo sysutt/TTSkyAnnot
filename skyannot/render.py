@@ -136,31 +136,38 @@ def render(display_rgb, shapes, named_rows, out_path, max_edge=4000, quality=92,
             lim_x, lim_y = 4.0 * OW, 4.0 * OH
             pts = [(min(max(x, -lim_x), 2 * lim_x), min(max(y, -lim_y), 2 * lim_y)) for x, y in pts]
             if tstyle.get("sketch"):
-                # Scribbled like a pen going round the same shape three or four times: every loop starts at a
-                # random point, overshoots its start a little, and wanders, so the strokes cross each other.
-                import random as _rnd
-                base_amp = max(2.0 * SS, edge / 420.0)
+                # A hand-drawn outline, not a trembling one: the deviation is a smooth function of the position
+                # along the shape (two low-frequency waves), so the line curves gently instead of buzzing. Two
+                # or three loops, each starting elsewhere and overshooting its start, cross like a pen going
+                # round twice.
+                import math as _m, random as _rnd
+                base_amp = max(1.5 * SS, edge / 700.0)
                 n = len(pts)
-
-                def _wander(seq, amp):
-                    out, ox, oy = [], 0.0, 0.0
-                    for (x, y) in seq:
-                        ox = ox * 0.5 + _rnd.uniform(-amp, amp) * 0.5
-                        oy = oy * 0.5 + _rnd.uniform(-amp, amp) * 0.5
-                        out.append((x + ox, y + oy))
-                    return out
-
-                loops = ((max(2, lw), 1.0), (max(1, lw // 2), 2.6), (max(1, lw // 2), 4.2))
+                loops = ((max(2, lw), 1.0), (max(1, lw // 2), 2.2), (max(1, lw // 2), 3.4))
                 for wid, amp_k in loops:
+                    amp = base_amp * amp_k
+                    w1 = _rnd.uniform(1.5, 3.5)          # waves around the outline
+                    w2 = _rnd.uniform(3.0, 6.0)
+                    p1, p2 = _rnd.uniform(0, 2 * _m.pi), _rnd.uniform(0, 2 * _m.pi)
+                    dx, dy = _rnd.uniform(-amp, amp), _rnd.uniform(-amp, amp)
                     if closed and n >= 6:
-                        a = _rnd.randint(0, n - 2)
-                        span = int(n * _rnd.uniform(1.05, 1.25))
-                        seq = [pts[(a + i) % n] for i in range(span)]
+                        a0 = _rnd.randint(0, n - 2)
+                        span = int(n * _rnd.uniform(1.06, 1.22))
+                        seq = [pts[(a0 + i) % n] for i in range(span)]
+                        length = float(n)
                     else:
-                        a = _rnd.randint(0, max(0, n - 4))
+                        a0 = _rnd.randint(0, max(0, n - 4))
                         span = int(n * _rnd.uniform(0.55, 1.0))
-                        seq = pts[a:a + max(2, span)]
-                    j = _wander(seq, base_amp * amp_k)
+                        seq = pts[a0:a0 + max(2, span)]
+                        length = float(max(2, len(seq)))
+                    j = []
+                    for i, (x, y) in enumerate(seq):
+                        th = 2 * _m.pi * i / length
+                        d = amp * (_m.sin(w1 * th + p1) + 0.5 * _m.sin(w2 * th + p2))
+                        # offset along the local normal so the curve shifts, not the points scatter
+                        nx, ny = j[-1] if j else (0.0, 0.0)
+                        j.append((x + dx + d * 0.6, y + dy + d * 0.4))
+                        _ = (nx, ny)
                     if len(j) >= 2:
                         pen.line(j, fill=col, width=wid)
             else:
@@ -169,23 +176,23 @@ def render(display_rgb, shapes, named_rows, out_path, max_edge=4000, quality=92,
             x, y = e["x"] * ks, e["y"] * ks
             r = 6 * lw
             if tstyle.get("sketch"):
-                # the same scribble for a small object: three overlapping pen circles, each a full turn plus
-                # an overshoot, with a slightly different radius and centre
+                # a casual pen circle: a smooth loop whose radius wobbles gently with the angle, drawn one
+                # and a bit times, with a lighter partial retrace. No per-pixel tremor.
                 import math as _m, random as _rnd
-                for wid, amp_k in ((max(2, lw), 1.0), (max(1, lw // 2), 1.6)):
-                    rr = r * _rnd.uniform(0.96, 1.06)
-                    cx = x + _rnd.uniform(-0.06, 0.06) * r
-                    cy = y + _rnd.uniform(-0.06, 0.06) * r
+                cx = x + _rnd.uniform(-0.05, 0.05) * r
+                cy = y + _rnd.uniform(-0.05, 0.05) * r
+                a1, a2 = _rnd.uniform(0.02, 0.05), _rnd.uniform(0.01, 0.03)
+                p1, p2 = _rnd.uniform(0, 2 * _m.pi), _rnd.uniform(0, 2 * _m.pi)
+                for p_i, (frac, wid) in enumerate(((1.0, max(2, lw)), (0.55, max(1, lw // 2)))):
                     a0 = _rnd.uniform(0, 2 * _m.pi)
-                    sweep = 2 * _m.pi * _rnd.uniform(1.02, 1.10)
-                    steps = 40
+                    sweep = 2 * _m.pi * (_rnd.uniform(1.03, 1.12) if p_i == 0 else _rnd.uniform(0.5, 0.75))
+                    rr_k = 1.0 if p_i == 0 else _rnd.uniform(1.02, 1.06)
+                    steps = max(12, int(40 * frac))
                     ring = []
-                    ox = oy = 0.0
                     for k in range(steps + 1):
                         a = a0 + sweep * k / steps
-                        ox = ox * 0.5 + _rnd.uniform(-1.0, 1.0) * SS * amp_k * 0.5
-                        oy = oy * 0.5 + _rnd.uniform(-1.0, 1.0) * SS * amp_k * 0.5
-                        ring.append((cx + rr * _m.cos(a) + ox, cy + rr * _m.sin(a) + oy))
+                        rr = r * rr_k * (1.0 + a1 * _m.sin(a + p1) + a2 * _m.sin(2 * a + p2))
+                        ring.append((cx + rr * _m.cos(a), cy + rr * _m.sin(a)))
                     dr.line(ring, fill=col, width=wid)
             else:
                 dr.ellipse([x - r, y - r, x + r, y + r], outline=col, width=lw)
