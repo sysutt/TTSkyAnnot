@@ -223,9 +223,12 @@ def star_blocks(P: Projector, ra0, de0, rad, area, epoch, gaia_mag=16.0, gaia_ro
     hip = []
     if "hip" in cats:
         try:
+            log("  正在获取 Hipparcos 星表…")
             hip = vizier.cone("hip", ra0, de0, rad, log=log)
+            log("  Hipparcos: %d 颗" % len(hip))
         except Exception as e:
             notes.append("Hipparcos: %s" % e)
+            log("  Hipparcos 获取失败，跳过：%s" % e)
     hra, hde = refine.propagate(_f(hip, "RAICRS"), _f(hip, "DEICRS"), _f(hip, "pmRA"), _f(hip, "pmDE"),
                                 1991.25, 2000.0)
     # the epoch of a named star whose catalogue position is kept: the Hipparcos list is also what positions
@@ -280,10 +283,13 @@ def star_blocks(P: Projector, ra0, de0, rad, area, epoch, gaia_mag=16.0, gaia_ro
     tyc = []
     if "tyc" in cats:
         try:
+            log("  正在获取 Tycho-2 星表…")
             tyc = vizier.cone("tyc", ra0, de0, rad, log=log)
+            log("  Tycho-2: %d 颗" % len(tyc))
         except Exception as e:
             tyc = []
             notes.append("Tycho-2: %s" % e)
+            log("  Tycho-2 获取失败，跳过：%s" % e)
     if tyc:
         tra, tde = _f(tyc, "RAmdeg"), _f(tyc, "DEmdeg")
         x, y = P.xy(tra, tde)
@@ -313,7 +319,9 @@ def star_blocks(P: Projector, ra0, de0, rad, area, epoch, gaia_mag=16.0, gaia_ro
     g = gaia_rows if "gaia" in cats else None
     if "gaia" in cats and g is None:
         try:
+            log("  正在获取 Gaia DR3 星表…")
             g = vizier.cone("gaia", ra0, de0, rad, mag_max=gaia_mag, log=log)
+            log("  Gaia DR3: %d 颗" % len(g))
         except Exception as e:
             g = []
             notes.append("Gaia DR3: %s" % e)
