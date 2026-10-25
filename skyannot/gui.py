@@ -4024,9 +4024,19 @@ class MainWindow(QMainWindow):
                 if res.wcs is not None:
                     self.wcs = res.wcs
                     self.overlay_data[res.image] = (res.shapes, res.named, res.grid)
-                    self._refresh_overlay()
-                self._solved_reload = True
-                self.show_image(res.image)              # reload: header may now carry the solution
+                    self._refresh_overlay()             # draw at once, without re-reading the picture
+                    try:
+                        rot = st.get("rotation")
+                        if rot is not None:
+                            self.lbl_rot.setText("%s %.1f°" % (t("旋转"), float(rot)))
+                        elif self.img is not None:
+                            self.lbl_rot.setText("%s %.1f°" % (t("北向"),
+                                                               _north_angle(self.wcs, self.img.width, self.img.height)))
+                    except Exception:
+                        pass
+                    txt = self.lbl_info.text()
+                    if t("未解析") in txt:
+                        self.lbl_info.setText(txt.replace(t("未解析"), t("已解析"), 1))
         else:
             it.setText("✗ " + name)
             it.setToolTip(res.error)
