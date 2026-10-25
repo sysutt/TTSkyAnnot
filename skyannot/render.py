@@ -136,10 +136,31 @@ def render(display_rgb, shapes, named_rows, out_path, max_edge=4000, quality=92,
             lim_x, lim_y = 4.0 * OW, 4.0 * OH
             pts = [(min(max(x, -lim_x), 2 * lim_x), min(max(y, -lim_y), 2 * lim_y)) for x, y in pts]
             if tstyle.get("sketch"):
+                # Hand-drawn look: three passes over the same outline. Each pass wanders along the line (a
+                # smoothed random walk, so the stroke bends instead of buzzing), the thin passes are offset
+                # further and are drawn in broken runs, which opens the gaps a pencil sketch has.
                 import random as _rnd
-                for wdt, jit in ((lw, 2.5 * SS), (max(1, lw // 2), 1.2 * SS)):
-                    j = [(x + _rnd.uniform(-jit, jit), y + _rnd.uniform(-jit, jit)) for x, y in pts]
-                    pen.line(j + [j[0]] if closed else j, fill=col, width=wdt)
+                base_amp = max(2.0 * SS, edge / 420.0)
+                passes = ((max(2, lw), 1.0, 0.0), (max(1, lw // 2), 3.8, 0.55), (max(1, lw // 3), 7.2, 0.78))
+                for wid, amp_k, skip in passes:
+                    amp = base_amp * amp_k
+                    j, ox, oy = [], 0.0, 0.0
+                    for (x, y) in pts:
+                        ox = ox * 0.6 + _rnd.uniform(-amp, amp) * 0.4
+                        oy = oy * 0.6 + _rnd.uniform(-amp, amp) * 0.4
+                        j.append((x + ox, y + oy))
+                    if closed and j:
+                        j.append(j[0])
+                    if skip <= 0 or len(j) < 4:
+                        pen.line(j, fill=col, width=wid)
+                        continue
+                    i = 0
+                    while i < len(j) - 1:
+                        run = _rnd.randint(2, max(3, len(j) // 5))
+                        seg = j[i:i + run + 1]
+                        if len(seg) >= 2:
+                            pen.line(seg, fill=col, width=wid)
+                        i += run + _rnd.randint(2, 7)
             else:
                 pen.line(pts + [pts[0]] if closed else pts, fill=col, width=lw)
         if e.get("kind") == "point":
