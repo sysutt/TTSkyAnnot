@@ -52,7 +52,7 @@ def _parse_tsv(text: str):
 
 
 def cone(cat: str, ra: float, dec: float, radius_deg: float, mag_max: float | None = None,
-         max_rows: int = 300000, timeout: float = 180.0, log=print):
+         max_rows: int = 300000, timeout: float = 25.0, log=print):
     """Rows (dicts of strings) within radius_deg of (ra, dec). Cached for 180 days."""
     import requests
     spec = CATALOGS[cat]
