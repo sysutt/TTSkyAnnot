@@ -2530,7 +2530,12 @@ class UpdateDialog(FramedDialog):
         notes = QPlainTextEdit()
         notes.setPlainText(str(feed.get("notes") or "").strip())
         notes.setReadOnly(True)
-        notes.setMinimumHeight(130)
+        notes.setMinimumHeight(150)
+        # 更新说明是可读文本，不是日志：字号按正文给，别用全局的最小等宽字号
+        font = notes.font()
+        font.setPointSize(max(11, font.pointSize() + 3))
+        notes.setFont(font)
+        notes.setStyleSheet("QPlainTextEdit{font-size:%dpt;line-height:150%%}" % max(11, font.pointSize()))
         self.body.addWidget(notes, 1)
         self.speed = QLabel()
         self.speed.setObjectName("note")
