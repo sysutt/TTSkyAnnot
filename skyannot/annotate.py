@@ -162,6 +162,8 @@ def online_target_block(P, rec, cats=None):
     if not key or key not in on:
         return None
     ra, de = float(rec["ra"]), float(rec["dec"])
+    if key in ("lbn", "ldn"):
+        ra, de = cat.precess_b1950(ra, de)
     x, y = P.xy([ra], [de])
     if not np.isfinite(x[0]) or not P.inside(x[0], y[0]):
         return None
