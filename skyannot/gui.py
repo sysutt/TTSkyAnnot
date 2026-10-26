@@ -3676,6 +3676,27 @@ class MainWindow(QMainWindow):
             if self.current:
                 self.show_image(self.current)
 
+    def _display_for_preview(self, img, opt):
+        """The picture the annotated preview should be built from.
+
+        When the histogram panel has left custom levels (or a white balance) on this frame, they win:
+        the annotation must look like what the user sees, not like the default stretch.
+        """
+        lv = getattr(img, "_levels", None)
+        bal = getattr(img, "_balance", None)
+        if lv is not None and bal is not None:
+            try:
+                base = np.asarray(img.data, np.float32)
+                if not bal.is_identity:
+                    base = bal.apply(base)
+                disp = lv.apply(base)
+                if disp.ndim == 2:
+                    disp = np.repeat(disp[..., None], 3, axis=2)
+                return disp
+            except Exception:
+                pass
+        return imageio.display_stretch(img, opt.stretch)
+
     def _render_view_preview(self):
         """Render the annotated picture at a modest size and show it: the viewer then matches the export."""
         res = self.results.get(self.current)
@@ -3690,7 +3711,7 @@ class MainWindow(QMainWindow):
                           grid="grid" in self._extras_on(), named="named" in self._extras_on(),
                           categories=self._groups_on(), dso_cats=self._groups_on())
             p = os.path.join(tempfile.gettempdir(), "ttskyannot_preview.jpg")
-            run.write_preview(img, res, opt, imageio.display_stretch(img, opt.stretch), p, max_edge=1600)
+            run.write_preview(img, res, opt, self._display_for_preview(img, opt), p, max_edge=1600)
             pm = QPixmap(p)
             if not pm.isNull():
                 self._preview_pix = p
@@ -4246,7 +4267,7 @@ class MainWindow(QMainWindow):
                           shape_style=self.cmb_shape.currentData(),
                           grid="grid" in self._extras_on(), named="named" in self._extras_on(),
                           categories=self._groups_on(), dso_cats=self._groups_on())
-            p = run.write_preview(img, res, opt, imageio.display_stretch(img, opt.stretch), path)
+            p = run.write_preview(img, res, opt, self._display_for_preview(img, opt), path)
         except Exception as e:
             QMessageBox.warning(self, "TTSkyAnnot", "%s\n\n%s" % (t("保存失败"), e))
             return
