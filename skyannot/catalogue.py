@@ -81,6 +81,16 @@ def _field(entry, name: str) -> str:
     return getattr(entry, name, "") or ""
 
 
+def fix_ra_hours(ra, key):
+    """vdB/Ced/RCW/PK 这类目录的赤经是「小时」，乘 15 换成度；LBN/LDN 不同，别动。"""
+    try:
+        if key in ("vdb", "ced", "rcw") and float(ra) <= 24.0:
+            return float(ra) * 15.0
+    except (TypeError, ValueError):
+        pass
+    return ra
+
+
 def precess_b1950(ra, dec):
     """LBN/LDN 的在线记录是 B1950 坐标，直接当 J2000 会偏 0.5-0.8 度，标注就会离开星云。"""
     try:

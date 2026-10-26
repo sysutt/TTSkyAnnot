@@ -260,9 +260,9 @@ def online_shape(P, rec, category):
     """
     if not rec:
         return None
-    ra, dec = float(rec["ra"]), float(rec["dec"])
+    from . import catalogue as cat
+    ra, dec = cat.fix_ra_hours(float(rec["ra"]), category), float(rec["dec"])
     if category in ("lbn", "ldn"):
-        from . import catalogue as cat
         ra, dec = cat.precess_b1950(ra, dec)
     x, y = P.xy(ra, dec)
     if not np.isfinite(x[0]) or not P.inside(x[0], y[0]):

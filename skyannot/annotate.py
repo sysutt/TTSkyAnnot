@@ -161,7 +161,7 @@ def online_target_block(P, rec, cats=None):
     on = set(cats) if cats else set(cat.KEYS)
     if not key or key not in on:
         return None
-    ra, de = float(rec["ra"]), float(rec["dec"])
+    ra, de = cat.fix_ra_hours(float(rec["ra"]), key), float(rec["dec"])
     if key in ("lbn", "ldn"):
         ra, de = cat.precess_b1950(ra, de)
     x, y = P.xy([ra], [de])
