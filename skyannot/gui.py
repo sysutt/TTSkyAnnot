@@ -2406,6 +2406,18 @@ class HistogramDialog(FramedDialog):
         self.lbl_vals.setText("%s %d    %s %.3f    %s %d" % (
             t("黑点"), int(round(lv.black * hist_mod.ADU)), t("中间调"), lv.mid,
             t("白点"), int(round(lv.white * hist_mod.ADU))))
+        self._emit_live()
+
+    def _emit_live(self):
+        """拖动时也把变化发给预览：70ms 节流，避免每个鼠标事件都重算整帧。"""
+        timer = getattr(self, "_live_timer", None)
+        if timer is None:
+            timer = QTimer(self)
+            timer.setSingleShot(True)
+            timer.setInterval(70)
+            timer.timeout.connect(self.changed.emit)
+            self._live_timer = timer
+        timer.start()
 
     def _hovered(self, value, counts):
         parts = []
@@ -3789,7 +3801,12 @@ class MainWindow(QMainWindow):
             self.logbox.appendPlainText("  %s: %s" % (p, e))
 
     def show_histogram(self):
-        """The histogram panel for the frame on screen. Its levels apply to the display only."""
+        """The histogram panel, docked under the preview so it never covers the picture.
+
+        It used to be a modal dialog: dragging a level was invisible until it closed, and the panel sat on
+        top of the frame it was meant to adjust. Docked, it stays open beside the picture and the levels
+        update the view as they move.
+        """
         if self.img is None:
             return
         raw = np.asarray(self.img.data, np.float32)
@@ -3799,15 +3816,37 @@ class MainWindow(QMainWindow):
                                   levels=self._levels_for(self.img))
         finally:
             QApplication.restoreOverrideCursor()
+        # 面板化：去掉对话框自己的窗口框架，放进底部停靠区
+        if getattr(self, "_hist_dock", None) is None:
+            dock = QDockWidget(t("直方图"), self)
+            dock.setObjectName("histDock")
+            dock.setFeatures(QDockWidget.DockWidgetMovable | QDockWidget.DockWidgetFloatable
+                             | QDockWidget.DockWidgetClosable)
+            self.addDockWidget(Qt.BottomDockWidgetArea, dock)
+            dock.visibilityChanged.connect(lambda vis: self._close_histogram() if not vis else None)
+            self._hist_dock = dock
+        dlg.setWindowFlags(Qt.Widget)
+        dlg.setModal(False)
+        self._hist_dock.setWidget(dlg)
+        self._hist_dock.show()
+        self._hist_dock.raise_()
         self._hist_before = (dlg.levels().as_dict(), dlg.balance().as_dict())
-        dlg.changed.connect(lambda: self._apply_histogram(dlg))
-        try:
-            dlg.exec_()
-        finally:
-            self._apply_histogram(dlg)
+        dlg.changed.connect(lambda: self._apply_histogram(dlg, fast=True))
+        self._hist_panel = dlg
 
-    def _apply_histogram(self, dlg):
-        """Take the panel's state onto the picture: the balance first, then the levels over it."""
+    def _close_histogram(self):
+        """Dock closed: one full-resolution render of whatever the panel left behind."""
+        dlg = getattr(self, "_hist_panel", None)
+        if dlg is not None:
+            self._apply_histogram(dlg, fast=False)
+            self._hist_panel = None
+
+    def _apply_histogram(self, dlg, fast=False):
+        """Take the panel's state onto the picture: the balance first, then the levels over it.
+
+        fast=True is the drag-time path: it works on a downscaled copy so the picture follows the sliders
+        while they move; the dialog's close event re-renders at full size.
+        """
         if self.img is None:
             return
         state = (dlg.levels().as_dict(), dlg.balance().as_dict())
@@ -3816,6 +3855,9 @@ class MainWindow(QMainWindow):
         self._hist_before = state
         self._set_levels(self.img, dlg.levels())
         self.img._balance = dlg.balance()
+        if fast:
+            self._refresh_preview(fast=True)
+            return
         QApplication.setOverrideCursor(Qt.WaitCursor)
         try:
             self._refresh_preview()
@@ -3837,15 +3879,27 @@ class MainWindow(QMainWindow):
         img._levels = levels
         self.cfg["levels"] = levels.as_dict()
 
-    def _refresh_preview(self):
-        """Redraw the picture with the current levels, leaving the file alone."""
+    def _refresh_preview(self, fast=False):
+        """Redraw the picture with the current levels, leaving the file alone.
+
+        fast=True uses a downscaled copy of the frame (built once, cached) so dragging a level stays
+        interactive on a 26-megapixel file.
+        """
         if self.img is None:
             return
         bal = getattr(self.img, "_balance", None) or imageio.Balance()
         lv = getattr(self.img, "_levels", None)
+        data = self.img.data
+        if fast:
+            cache = getattr(self, "_drag_cache", None)
+            if cache is None or cache[0] is not data:
+                k = max(1, int(max(data.shape[:2]) / 1400))
+                cache = (data, np.ascontiguousarray(data[::k, ::k]))
+                self._drag_cache = cache
+            data = cache[1]
         if lv is not None and not lv.per_channel:
             # the panel moves one curve: 16-bit table, no 300 MB float frame in between
-            self.view.show_rgb(imageio.apply_u8(self.img.data, bal, lv))
+            self.view.show_rgb(imageio.apply_u8(data, bal, lv))
             return
         base = np.asarray(self.img.data, np.float32)
         if bal is not None and not bal.is_identity:
