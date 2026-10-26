@@ -2983,7 +2983,8 @@ class MainWindow(QMainWindow):
 
         # everything below is added in order to this column; the layout is placed once, here
         self.controls = QVBoxLayout()
-        self.controls.setContentsMargins(0, 0, 0, 0)
+        # 右侧留出滚动条的宽度，否则按钮会贴到滚动条下面、被裁掉一截
+        self.controls.setContentsMargins(0, 0, 14, 0)
         self.controls.setSpacing(6)
         # The groups below can be taller than a small screen: they scroll inside the dock, while the queue,
         # the actions and the log keep their places.
