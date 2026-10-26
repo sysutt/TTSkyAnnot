@@ -81,6 +81,18 @@ def _field(entry, name: str) -> str:
     return getattr(entry, name, "") or ""
 
 
+def precess_b1950(ra, dec):
+    """LBN/LDN 的在线记录是 B1950 坐标，直接当 J2000 会偏 0.5-0.8 度，标注就会离开星云。"""
+    try:
+        from astropy.coordinates import SkyCoord
+        import astropy.units as u
+        c = SkyCoord(ra=float(ra) * u.deg, dec=float(dec) * u.deg, frame="fk4", equinox="B1950.0")
+        j = c.transform_to("icrs")
+        return float(j.ra.deg), float(j.dec.deg)
+    except Exception:
+        return ra, dec
+
+
 def catalogue_of(entry) -> str:
     """Which catalogue an object's own designation puts it in.
 

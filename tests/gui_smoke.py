@@ -2421,7 +2421,7 @@ def main():
     from skyannot import shapes                             # noqa: E402
     w3 = WCS(naxis=2)
     w3.wcs.ctype = ["RA---TAN", "DEC--TAN"]
-    w3.wcs.crval = [60.5, 26.25]                           # LBN777
+    w3.wcs.crval = [61.26, 26.39]                          # LBN777 的 J2000 位置（在线库给的是 B1950）
     w3.wcs.crpix = [250.0, 250.0]
     w3.wcs.cd = [[-6.0e-4, 0.0], [0.0, 6.0e-4]]
     proj3 = annotate.Projector(w3, 500, 500)
