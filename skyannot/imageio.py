@@ -169,7 +169,12 @@ def load(path: str, want_debayer: bool = True, pattern: str = "") -> LoadedImage
     # and nothing in it is truly black. The level alone cannot tell them apart: a long sub at high gain sits at
     # 0.05 and is still linear, while a finished master can have its sky as low as 0.02.
     sharp = mad <= 0.10 * max(med, 1e-6)
-    linear = fmt != "raster" and near_black < 0.002 and (med < 0.03 or sharp)
+    # 天空中位低于 0.01 的只可能是线性数据（成品图的天空不会贴到这么低），不需要再看过黑比例；
+    # 之前 M83 这类低 pedestal 的 master 因为 99.8% 像素都在 0.002 以下而被误判成成品图，拉伸因此失效。
+    if fmt != "raster" and med < 0.01:
+        linear = True
+    else:
+        linear = fmt != "raster" and near_black < 0.002 and (med < 0.03 or sharp)
     return LoadedImage(path=path, fmt=fmt, data=data, keywords=kw, linear=linear,
                        debayered=debayered, bayered=is_mosaic)
 
