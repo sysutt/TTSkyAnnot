@@ -174,7 +174,9 @@ def load(path: str, want_debayer: bool = True, pattern: str = "") -> LoadedImage
     if fmt != "raster" and med < 0.01:
         linear = True
     else:
-        linear = fmt != "raster" and near_black < 0.002 and (med < 0.03 or sharp)
+        # registered/drizzled 的 master 常被归一化到 0..1，天空中位在 0.03 上下、边缘还有零像素；
+        # 用「近黑比例 < 5% 且中位 < 0.08」判断线性，比原来 <0.002 / <0.03 更贴合这类文件。
+        linear = fmt != "raster" and near_black < 0.05 and (med < 0.08 or sharp)
     return LoadedImage(path=path, fmt=fmt, data=data, keywords=kw, linear=linear,
                        debayered=debayered, bayered=is_mosaic)
 
