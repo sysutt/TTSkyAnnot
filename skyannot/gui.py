@@ -4221,13 +4221,13 @@ class MainWindow(QMainWindow):
                 if res.wcs is not None:
                     self.wcs = res.wcs
                     self.overlay_data[res.image] = (res.shapes, res.named, res.grid)
+                    # 先把标注画到当前画面上：即便后面的「效果预览」渲染失败，标注也一定能看到
+                    self._refresh_overlay()
                     if getattr(self, "act_preview", None) is not None and self.act_preview.isChecked():
                         try:
                             self._render_view_preview()
-                        except Exception as e:      # 预览失败不能影响解析流程本身
+                        except Exception as e:      # 预览失败不能影响标注显示，也不影响解析流程
                             self.logbox.appendPlainText("效果预览失败: %s: %s" % (type(e).__name__, e))
-                    else:
-                        self._refresh_overlay()         # draw at once, without re-reading the picture
                     try:
                         rot = st.get("rotation")
                         if rot is not None:
