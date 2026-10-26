@@ -3878,11 +3878,22 @@ class MainWindow(QMainWindow):
         self._hist_panel = dlg
 
     def _close_histogram(self):
-        """Dock closed: one full-resolution render of whatever the panel left behind."""
+        """Dock closed: one full-resolution render of whatever the panel left behind.
+
+        Guarded against re-entry: the dock's visibilityChanged also fires while the window itself is being
+        shown or hidden, and a redraw at that moment must not disturb a solve that is in progress.
+        """
+        if getattr(self, "_closing_hist", False):
+            return
         dlg = getattr(self, "_hist_panel", None)
-        if dlg is not None:
+        if dlg is None:
+            return
+        self._closing_hist = True
+        try:
             self._apply_histogram(dlg, fast=False)
             self._hist_panel = None
+        finally:
+            self._closing_hist = False
 
     def _apply_histogram(self, dlg, fast=False):
         """Take the panel's state onto the picture: the balance first, then the levels over it.
@@ -4211,7 +4222,10 @@ class MainWindow(QMainWindow):
                     self.wcs = res.wcs
                     self.overlay_data[res.image] = (res.shapes, res.named, res.grid)
                     if getattr(self, "act_preview", None) is not None and self.act_preview.isChecked():
-                        self._render_view_preview()
+                        try:
+                            self._render_view_preview()
+                        except Exception as e:      # 预览失败不能影响解析流程本身
+                            self.logbox.appendPlainText("效果预览失败: %s: %s" % (type(e).__name__, e))
                     else:
                         self._refresh_overlay()         # draw at once, without re-reading the picture
                     try:
