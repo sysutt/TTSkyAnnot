@@ -3758,9 +3758,33 @@ class MainWindow(QMainWindow):
         if res and res.ok:
             self.logbox.appendPlainText(t("标注风格已切换：点「只存标注图」可按新风格重存，不必导出全部文件。"))
 
+    def _schedule_preview_refresh(self):
+        """Rebuild the annotated preview shortly after a settings change.
+
+        The rendered preview is a separate picture, so toggling a catalogue, a star list or the shape style
+        has to regenerate it; a 250 ms delay keeps a quick series of clicks from rendering it several times.
+        """
+        timer = getattr(self, "_preview_timer", None)
+        if timer is None:
+            timer = QTimer(self)
+            timer.setSingleShot(True)
+            timer.setInterval(250)
+            timer.timeout.connect(self._render_view_preview_now)
+            self._preview_timer = timer
+        timer.start()
+
+    def _render_view_preview_now(self):
+        if getattr(self, "act_preview", None) is None or not self.act_preview.isChecked():
+            return
+        try:
+            self._render_view_preview()
+        except Exception as e:
+            self.logbox.appendPlainText("效果预览失败: %s: %s" % (type(e).__name__, e))
+
     def _refresh_overlay(self):
         if getattr(self, "act_preview", None) is not None and self.act_preview.isChecked():
             self.view.clear_overlay()      # the rendered preview already has the annotations
+            self._schedule_preview_refresh()
             return
         data = self.overlay_data.get(self.current)
         if self.act_overlay.isChecked() and data:
