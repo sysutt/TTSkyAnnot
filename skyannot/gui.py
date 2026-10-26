@@ -3676,6 +3676,21 @@ class MainWindow(QMainWindow):
             if self.current:
                 self.show_image(self.current)
 
+    def _inherit_stretch(self, img):
+        """第 1 张图新载入时没有自定义拉伸；把它继承自屏幕上那张，标注图才会和预览一致。"""
+        cur = self.img
+        if cur is None or img is None:
+            return
+        try:
+            if getattr(cur, "path", None) != getattr(img, "path", None):
+                return
+            if getattr(cur, "_levels", None) is not None:
+                img._levels = cur._levels
+            if getattr(cur, "_balance", None) is not None:
+                img._balance = cur._balance
+        except Exception:
+            pass
+
     def _display_for_preview(self, img, opt):
         """The picture the annotated preview should be built from.
 
@@ -3705,6 +3720,7 @@ class MainWindow(QMainWindow):
             return
         try:
             img = imageio.load(res.image, want_debayer=self.cfg.get("debayer", True), pattern="")
+            self._inherit_stretch(img)
             opt = replace(self._last_opt or run.Options(), write_preview=True,
                           annotation_style=self.cfg.get("annotation_style", "science"),
                           shape_style=self.cmb_shape.currentData(),
@@ -4262,6 +4278,7 @@ class MainWindow(QMainWindow):
         path = run.preview_path(res.image, self.cfg.get("annotation_style", "science"), out_dir)
         try:
             img = imageio.load(res.image, want_debayer=self.cfg.get("debayer", True), pattern="")
+            self._inherit_stretch(img)
             opt = replace(self._last_opt or run.Options(), write_preview=True,
                           annotation_style=self.cfg.get("annotation_style", "science"),
                           shape_style=self.cmb_shape.currentData(),
