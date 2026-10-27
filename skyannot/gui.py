@@ -4258,7 +4258,9 @@ class MainWindow(QMainWindow):
                 if res.wcs is not None:
                     self.wcs = res.wcs
                     self.overlay_data[res.image] = (res.shapes, res.named, res.grid)
-                    # 先把标注画到当前画面上：即便后面的「效果预览」渲染失败，标注也一定能看到
+                    # 解析成功：自动切到标注成品图，用户不必再点一次开关
+                    if getattr(self, "act_preview", None) is not None and not self.act_preview.isChecked():
+                        self.act_preview.setChecked(True)
                     self._refresh_overlay()
                     if getattr(self, "act_preview", None) is not None and self.act_preview.isChecked():
                         try:
