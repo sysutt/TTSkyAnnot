@@ -4957,6 +4957,12 @@ def _install_excepthook():
 
 def main(files=None):
     _install_excepthook()
+    # 注册「打开方式」：让资源管理器里右键图片能看到本程序，并直接带文件启动
+    try:
+        from . import shellex
+        shellex.register()
+    except Exception:
+        pass
     cfg = config.load()
     set_language(cfg.get("language", ""))
     QApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)

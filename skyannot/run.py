@@ -557,11 +557,12 @@ def solve(image_path: str, opt: Options, log=print, progress=lambda p, msg: None
             # even be rotated 180 degrees); it must not be trusted just because the solver returned it
             log("  本地方案只有 %d 颗参考星吻合，改用缩略图接口复核…" % (stats.get("matched") or 0))
         # 超广域/星野图：整幅匹配解不出时，交给服务端分块 + 亮星复核（mode = "wide"）
-        if wcs is None and wcs is not None:
-            pass
         if wcs is None:
+            log("  广域定位：分块盲解 + 全画幅亮星复核，约需 30~60 秒…")
+            progress(0.35, "wide")
             try:
-                w0, winfo = solver.solve_wide(st, img.width, img.height, log=log)
+                w0, winfo = solver.solve_wide(st, img.width, img.height, log=log,
+                                              pixscale=solver.exif_pixscale(image_path))
                 wcs, stats = w0, dict(winfo)
                 stats["solver"] = "wide-tiles"
             except Exception as e:
@@ -582,6 +583,10 @@ def solve(image_path: str, opt: Options, log=print, progress=lambda p, msg: None
         if gaia_capped is not None:
             notes.append("Gaia DR3 limited to the brightest %d stars of this wide field (down to G %.2f)"
                          % (gaia_cap or opt.gaia_max_rows, gaia_capped))
+        if stats.get("mode") == "wide":
+            notes.append("广域定位：%s 颗亮星复核通过，全画幅拟合残差 %.3f°%s"
+                         % (stats.get("bright_stars") or 0, stats.get("rms_deg") or 0,
+                            "；地景占半幅，画面中心可能再差 0.3°" if (stats.get("sky_coverage") or 1) < 0.6 else ""))
         blocks += sblocks
         # The online catalogues are filled by a cone query around the solved centre: the frame's own geometry is
         # the best query there is, and the radius covers the corners, so nothing in the picture is missed. The

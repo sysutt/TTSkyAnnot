@@ -57,8 +57,48 @@
 - 带中心+尺度提示：**1.6–1.8 秒**（LBN777 宽场实测）；
 - 精度验收（对 Gaia 精修参考）：中心误差 **1.17″**、尺度误差 **0.275%**、旋转误差 **0.000°**、±0.3 px 抖动下稳定；镜像画幅（左右/上下翻转）均可解出，`parity=0`。
 
+## 广域/星野接口（POST /api/i/solve_wide）
+
+几十度的星野图（银河、全天、手机/相机广角）用整幅 gnomonic 匹配必然失败，这个接口改成分块盲解 +
+亮星复核。客户端只上传星点，不上传图片。
+
+```json
+{"w": 5472, "h": 3648, "stars": [[1234.5, 789.0, 54321.0], "..."], "total": 45, "per_tile": 18}
+```
+
+- `stars`：最多 3000 颗（要给足；一块 34° 的星野只有几十颗星时盲解成功率接近零）；
+- `total` / `per_tile`：总预算与单块预算（秒），默认 45 / 18。
+
+成功响应（`ra`/`dec` 是**画面中心**，不是某一块的中心）：
+
+```json
+{"ok": true, "mode": "wide", "solver": "wide-tiles",
+ "ra": 272.168, "dec": -24.720, "cd": [[-0.00906, 0.01188], [-0.01186, -0.00921]],
+ "pixscale": 56.414, "rotation": 233.7, "mirrored": true,
+ "rms_px": 2.38, "rms_deg": 0.037, "accuracy_deg": 0.3, "sky_coverage": 0.5,
+ "bright_stars": 297, "control": 90.9, "pairs": 332, "verified": true,
+ "blocks": [{"rect": [0, 0, 0, 0, 2280, 1520], "pairs": 43, "control": 11.6, "pixscale": 53.0}],
+ "elapsed_s": 50.9}
+```
+
+判定与精度：
+
+- 34° 的块里 G<8.5 的星表星有上千颗，**一个错误 WCS 也能在 3 像素内撞上几十颗**。所以块内命中数
+  必须高出「星表整体平移」的对照 5σ，才算解出；
+- 块解只当种子：把切点从块中心迭代到画面中心，每轮按残差剔误配（不剔会把切点拉到 25° 外、尺度差 16%）；
+- 最后按整幅拟合投一遍亮星，命中数仍要高出对照 5σ 才返回 `verified`；
+- `accuracy_deg` 取残差、0.15°、以及「配对星覆盖不足 60% 时 0.3°」三者中的最大值——星野图的地景
+  占掉半幅时，画面中心只能外推，两次独立解算实测差 0.3°；
+- 实测 IMG_7260（6D + 24mm，73°×51°）：`rms_px` 2.38（0.037°），亮星复核 297 颗、对照 91 颗，50 秒。
+
+失败响应 `{"ok": false, "code": "no_match", "reason": "...", "blocks": [...]}`：分块解不出，
+或者解出了但全画面复核没通过（两者用 `blocks` 区分）。
+
 ## 部署记录
 
+- `wide_solve.py`：新增（广域分块盲解 + 亮星显著性复核 + 全画幅拟合），`solve_api.py` 的
+  `handle_solve_wide` 改成薄委托（备份 `solve_api.py.bak-wide2`）；依赖 `/home/ubuntu/astro` 下的
+  `solver.py` / `solve_api.py` 的星表索引；
 - `solve_api.py`：响应字段与错误码（备份 `solve_api.py.bak-nebula3d-*`）；
 - `solver.py`：`SOLVE_BUDGET` 45→14 秒（备份 `solver.py.bak-budget-*`）；
 - `interactions_service.py`：429 带 `retry_after`（备份 `interactions_service.py.bak-starcone-*` / `-3`）。
