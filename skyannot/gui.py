@@ -2758,7 +2758,9 @@ class MainWindow(QMainWindow):
         self.act_preview = act(t("效果预览"), self._toggle_preview_mode, "", checkable=True)
         self.act_preview.setToolTip(t("在当前图上按所选标注风格渲染成品效果（与导出的标注图一致）"))
         self.act_preview.setChecked(bool(self.cfg.get("preview_mode", True)))
+        # 「显示标注」已移除：效果预览关闭即显示原图，叠加层不再使用
         self.act_overlay = act(t("显示标注"), self._toggle_overlay, "A", checkable=True)
+        self.act_overlay.setVisible(False)
         self.act_overlay.setChecked(bool(self.cfg.get("show_overlay", True)))
         self.act_header = act(t("文件头"), self.show_header, "H")
         self.act_fix_header = act(t("修正文件头"), self.fix_header)
