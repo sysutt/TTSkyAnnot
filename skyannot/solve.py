@@ -20,6 +20,7 @@ import numpy as np
 TTASTRO_URL = "https://ttastro.com/api/i/solve"
 TTASTRO_ASYNC_URL = "https://ttastro.com/api/i/solve_async"
 TTASTRO_ASYNC_RESULT = "https://ttastro.com/api/i/solve_async_result"
+TTASTRO_WIDE_URL = "https://ttastro.com/api/i/solve_wide"
 TTASTRO_STARS = "https://ttastro.com/api/i/starcone"     # the same service, star cones for refinement
 NOVA_URL = "https://nova.astrometry.net"
 
@@ -158,7 +159,7 @@ def solve_ttastro(stars, width, height, hint=None, log=print, timeout=60.0, max_
     import requests
     from . import __version__
     payload = {"w": int(width), "h": int(height),
-               "stars": [[round(float(s[0]), 2), round(float(s[1]), 2), round(float(s[2]), 1)] for s in stars[:200]],
+               "stars": [[round(float(s[0]), 2), round(float(s[1]), 2), round(float(s[2]), 1)] for s in stars[:350]],
                "hint": {k: v for k, v in (hint or {}).items() if k in ("target", "ra", "dec", "pixscale") and v is not None}}
     if len(payload["stars"]) < 8:
         raise SolveError("too few stars detected (%d)" % len(payload["stars"]))
@@ -239,6 +240,37 @@ def solve_ttastro(stars, width, height, hint=None, log=print, timeout=60.0, max_
 
 
 # ───────────────────────────── ASTAP (offline) ─────────────────────────────
+def solve_wide(stars, width, height, log=print, timeout=180.0):
+    """超广域/星野图：整幅 gnomonic 匹配在几十度视场上必然失败，改由服务端分块 + 亮星复核。
+
+    返回 (wcs, info)；info 里带 mode="wide" 与 accuracy_deg，调用方据此降低标注精度要求。
+    """
+    import requests
+    from . import __version__
+    payload = {"w": int(width), "h": int(height),
+               "stars": [[round(float(s[0]), 2), round(float(s[1]), 2), round(float(s[2]), 1)]
+                         for s in stars[:400]]}
+    if len(payload["stars"]) < 24:
+        raise SolveError("too few stars for a wide-field solve (%d)" % len(payload["stars"]))
+    r = requests.post(TTASTRO_WIDE_URL, json=payload,
+                      headers={"User-Agent": "TTSkyAnnot/%s (Windows)" % __version__}, timeout=timeout)
+    try:
+        d = r.json()
+    except ValueError:
+        raise SolveError("wide solver returned HTTP %d" % r.status_code)
+    if not d.get("ok"):
+        raise SolveError(d.get("reason") or "wide solve failed")
+    cd = d.get("cd") or []
+    w = _tan_wcs((d["ra"], d["dec"]), (width / 2.0 + 1.0, height / 2.0 + 1.0), cd)
+    info = {"solver": "wide-tiles", "mode": "wide", "ra": d.get("ra"), "dec": d.get("dec"),
+            "accuracy_deg": d.get("accuracy_deg"), "bright_stars": d.get("bright_stars"),
+            "resid_px": d.get("resid_px"), "pixscale": d.get("pixscale"),
+            "matched": d.get("bright_stars")}
+    log("  wide-field: %.2f°, %.1f\"/px, %s bright stars matched"
+        % (d.get("accuracy_deg") or 0, d.get("pixscale") or 0, d.get("bright_stars")))
+    return w, info
+
+
 def astap_candidates(configured: str | None = None) -> list:
     """Every path ASTAP is looked for, in order, so a miss can be reported honestly."""
     cands = [configured] if configured else []

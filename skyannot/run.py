@@ -556,6 +556,17 @@ def solve(image_path: str, opt: Options, log=print, progress=lambda p, msg: None
             # a solution where only a handful of catalogue stars line up is usually a wrong match (it can
             # even be rotated 180 degrees); it must not be trusted just because the solver returned it
             log("  本地方案只有 %d 颗参考星吻合，改用缩略图接口复核…" % (stats.get("matched") or 0))
+        # 超广域/星野图：整幅匹配解不出时，交给服务端分块 + 亮星复核（mode = "wide"）
+        if wcs is None and wcs is not None:
+            pass
+        if wcs is None:
+            try:
+                w0, winfo = solver.solve_wide(st, img.width, img.height, log=log)
+                wcs, stats = w0, dict(winfo)
+                stats["solver"] = "wide-tiles"
+            except Exception as e:
+                if "too few stars" not in str(e):
+                    log("  wide-field solver failed: %s" % e)
         # The upload already ran as part of the race; a weak solution is left to the caller to reject.
         if wcs is None:
             raise RuntimeError("could not solve the image (" + "; ".join(errors or ["no solver available"]) + ")")
