@@ -129,6 +129,10 @@ def render(display_rgb, shapes, named_rows, out_path, max_edge=4000, quality=92,
             x, y = x * ks, y * ks
             r = max(2.5 * lw, max(16 * SS, int(edge / 75.0)))
             pen = gdr if gdr is not None else dr
+            # 奶油色描边 + 原色芯：深红 X 落在红色星云上也能分辨
+            halo = (243, 228, 192, 235)
+            pen.line([(x - r, y - r), (x + r, y + r)], fill=halo, width=max(5, lw * 3))
+            pen.line([(x - r, y + r), (x + r, y - r)], fill=halo, width=max(5, lw * 3))
             pen.line([(x - r, y - r), (x + r, y + r)], fill=col, width=max(3, lw * 2))
             pen.line([(x - r, y + r), (x + r, y - r)], fill=col, width=max(3, lw * 2))
             labels.append(([(x, y, None)], e.get("name") or e.get("label") or "", col, font,
