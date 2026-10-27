@@ -18,6 +18,8 @@ import time
 import numpy as np
 
 TTASTRO_URL = "https://ttastro.com/api/i/solve"
+TTASTRO_ASYNC_URL = "https://ttastro.com/api/i/solve_async"
+TTASTRO_ASYNC_RESULT = "https://ttastro.com/api/i/solve_async_result"
 TTASTRO_STARS = "https://ttastro.com/api/i/starcone"     # the same service, star cones for refinement
 NOVA_URL = "https://nova.astrometry.net"
 
@@ -148,7 +150,7 @@ def _tan_wcs(crval, crpix, cd):
 
 
 # ───────────────────────────── ttastro.com ─────────────────────────────
-def solve_ttastro(stars, width, height, hint=None, log=print, timeout=60.0, max_wait=180.0, api_key=""):
+def solve_ttastro(stars, width, height, hint=None, log=print, timeout=60.0, max_wait=90.0, api_key=""):
     """stars: [(x, y, flux, ...)] in index coordinates, brightest first.
     The server has a single solve slot and answers {"code": "busy"} when it is taken: back off and retry.
     api_key: the key from ttastro.com/ttskyannot/key; without one the server allows only a few anonymous
@@ -160,37 +162,66 @@ def solve_ttastro(stars, width, height, hint=None, log=print, timeout=60.0, max_
                "hint": {k: v for k, v in (hint or {}).items() if k in ("target", "ra", "dec", "pixscale") and v is not None}}
     if len(payload["stars"]) < 8:
         raise SolveError("too few stars detected (%d)" % len(payload["stars"]))
-    t0, delay = time.time(), 3.0
-    while True:
-        headers = {"User-Agent": "TTSkyAnnot/%s (Windows)" % __version__}
-        if (api_key or "").strip():
-            headers["X-API-Key"] = api_key.strip()
-        # 网络抖动（SSL EOF、连接重置）不该直接让 ttastro 判负：短退避重试两次
-        last_err = None
-        r = None
+    headers = {"User-Agent": "TTSkyAnnot/%s (Windows)" % __version__}
+    if (api_key or "").strip():
+        headers["X-API-Key"] = api_key.strip()
+
+    def _post(url, body, timeout_s):
+        """POST with two retries: a dropped TLS connection must not cost the whole attempt."""
+        last = None
         for attempt in range(3):
             try:
-                r = requests.post(TTASTRO_URL, json=payload, headers=headers, timeout=timeout)
-                break
+                return requests.post(url, json=body, headers=headers, timeout=timeout_s)
             except Exception as e:
-                last_err = e
+                last = e
                 if attempt < 2:
-                    log("  ttastro: 连接失败，%.0f 秒后重试（%d/2）" % (1.5 * (attempt + 1), attempt + 1))
+                    log("  ttastro: connection failed, retrying in %.0f s (%d/2)" % (1.5 * (attempt + 1), attempt + 1))
                     time.sleep(1.5 * (attempt + 1))
-        if r is None:
-            raise SolveError("ttastro unreachable: %s" % str(last_err)[:120])
-        try:
-            d = r.json()
-        except ValueError:
-            raise SolveError("solver returned HTTP %d" % r.status_code)
-        if d.get("ok"):
+        raise SolveError("ttastro unreachable: %s" % str(last)[:120])
+
+    t0 = time.time()
+    # The solve runs as a server job: the client can give up waiting and the work still finishes, so
+    # several engines can be tried at once instead of one after the other.
+    d = None
+    r = _post(TTASTRO_ASYNC_URL, payload, 60)
+    try:
+        job = (r.json() or {}).get("job")
+    except ValueError:
+        job = None
+    if job:
+        deadline = time.time() + max_wait
+        while time.time() < deadline:
+            time.sleep(2.0)
+            q = _post(TTASTRO_ASYNC_RESULT, {"job": job}, 30)
+            try:
+                d = q.json()
+            except ValueError:
+                continue
+            if d.get("status") == "running":
+                if int(time.time() - t0) % 10 == 0:
+                    log("  ttastro: still solving, %.0f s" % (time.time() - t0))
+                continue
             break
-        if d.get("code") == "busy" and time.time() - t0 < max_wait:
-            log("  solver busy, retrying in %.0f s" % delay)
-            time.sleep(delay)
-            delay = min(delay * 1.6, 20.0)
-            continue
-        raise SolveError(d.get("reason") or d.get("code") or "not solved")
+        else:
+            raise SolveError("%.0f s without a match; give the target or the equipment and it is much faster"
+                             % (time.time() - t0))
+        if d and d.get("status") == "running":
+            raise SolveError("%.0f s without a match" % (time.time() - t0))
+    else:
+        # an older server without the job API: fall back to the blocking call
+        delay = 3.0
+        while True:
+            d = _post(TTASTRO_URL, payload, timeout).json()
+            if d.get("ok"):
+                break
+            if d.get("code") == "busy" and time.time() - t0 < max_wait:
+                log("  solver busy, retrying in %.0f s" % delay)
+                time.sleep(delay)
+                delay = min(delay * 1.6, 20.0)
+                continue
+            raise SolveError(d.get("reason") or d.get("code") or "not solved")
+    if not d or not d.get("ok"):
+        raise SolveError((d or {}).get("reason") or (d or {}).get("code") or "not solved")
     # The service answers cd in radians around the image centre (Nebula3D blind-solve spec); FITS wants
     # degrees. cd_deg is sent as well, so an engine that still answers degrees keeps working.
     cd = d.get("cd_deg")

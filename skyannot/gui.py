@@ -1877,6 +1877,7 @@ class SettingsDialog(FramedDialog):
         row_key.addWidget(b_key)
         f.addRow(t("在线解析密钥"), row_key)
         self.astrokey = QLineEdit(cfg.get("astrometry_key", ""))
+        self.astrokey.setEchoMode(QLineEdit.Password)
         self.astrokey.setPlaceholderText(t("可留空；填写后优先使用你自己的 nova 额度"))
         f.addRow(t("astrometry.net 密钥"), self.astrokey)
         self.astap = QLineEdit(cfg.get("astap_path", ""))
@@ -4161,7 +4162,9 @@ class MainWindow(QMainWindow):
                           target_object=self._target_obj,
                           tickwhale_base=self.cfg.get("tickwhale_base", ""),
                           astap_path=self.cfg.get("astap_path", ""),
-                          api_key=self.cfg.get("api_key", ""), gaia_mag=float(self.cfg.get("gaia_mag", 16)),
+                          api_key=self.cfg.get("api_key", ""),
+                          astrometry_key=self.cfg.get("astrometry_key", ""),
+                          gaia_mag=float(self.cfg.get("gaia_mag", 16)),
                           remote_fallback=bool(self.cfg.get("remote_fallback", True)),
                           annotation_style=self.cfg.get("annotation_style", "science"),
                           solve_image_url=self.cfg.get("solve_image_url", ""),

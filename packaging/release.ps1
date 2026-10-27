@@ -21,7 +21,7 @@
 
 param(
     [string]$Version = "",
-    [ValidateSet("patch", "minor", "major")][string]$Bump = "patch",
+    [ValidateSet("patch", "minor", "major")][string]$Bump = "minor",
     [string]$Notes = "",
     [string]$Feed = "E:\SkyAnnot\updates",
     [string]$BuildDir = "E:\SkyAnnot\dist_new\TTSkyAnnot",
