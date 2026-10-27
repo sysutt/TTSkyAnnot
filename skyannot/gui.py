@@ -706,9 +706,13 @@ class AnnotateWorker(QThread):
         self._reply.set()
 
     def run(self):
-        for idx, path in self.items:
+        total = len(self.items)
+        for n, (idx, path) in enumerate(self.items, start=1):
+            # 解析日志带「队列序号/总数」：批量跑的时候能直接把一条日志对回左侧列表的第几张
+            tag = "[%d/%d] " % (idx + 1, total)
+            log = lambda m, _t=tag: self.log.emit(_t + m)
             try:
-                img, res, disp = run.solve(path, self.opt, log=self.log.emit,
+                img, res, disp = run.solve(path, self.opt, log=log,
                                            progress=lambda f, msg, i=idx: self.progress.emit(i, f))
                 if res.ok:
                     self._reply.clear()
