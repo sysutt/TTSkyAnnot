@@ -291,6 +291,19 @@ def online_shape(P, rec, category):
              "ra": ra, "dec": dec, "x": round(float(x[0]), 2), "y": round(float(y[0]), 2),
              "source": "tickwhale", "kind": "point", "polygons": []}
     maj = float(rec.get("maj") or 0.0)
+    # 在线库的尺寸有时比本地 OpenNGC 更小（NGC1499 在线 120'，本地 160'）：取较大者，
+    # 免得同一个天体在「在线目录」开关打开时反而画出更小的圈
+    try:
+        from . import catalogs as _cats
+        key = name.replace(" ", "").upper()
+        for d in _cats.openngc():
+            dn = (d.name or "").replace(" ", "").upper()
+            if dn == key or (d.messier or "").replace(" ", "").upper() == key:
+                if (d.maj or 0) > maj:
+                    maj = float(d.maj)
+                break
+    except Exception:
+        pass
     if maj > 0:
         er, ed = _ellipse_world(ra, dec, maj, maj, 0.0)
         ex, ey = P.xy(er, ed)
