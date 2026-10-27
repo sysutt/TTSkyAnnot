@@ -32,7 +32,8 @@ class Options:
     tickwhale_base: str = ""         # the online database, for the region query that fills a field
     solvers: tuple = ("ttastro", "astap")
     astap_path: str = ""
-    api_key: str = ""                # ttastro online solve key (empty = anonymous allowance)
+    api_key: str = ""
+    astrometry_key: str = ""      # 用户自己的 astrometry.net key（可选，服务端优先用）                # ttastro online solve key (empty = anonymous allowance)
     gaia_mag: float = 16.0
     debayer: bool = True             # interpolate a one-shot colour mosaic before solving or annotating
     bayer_pattern: str = "auto"      # "auto" = the header's BAYERPAT, else one of debayer.PATTERNS
@@ -507,7 +508,7 @@ def solve(image_path: str, opt: Options, log=print, progress=lambda p, msg: None
             # is the only path for arbitrary screenshots and processed pictures.
             try:
                 log("  正在识别星场，可能需要几分钟…")
-                w0, rinfo = solver.remote_image(disp, api_key=opt.api_key, log=log,
+                w0, rinfo = solver.remote_image(disp, api_key=opt.api_key, astrometry_key=opt.astrometry_key, log=log,
                                                pixscale=hint.get("pixscale"),
                                                image_url=opt.solve_image_url or None,
                                                result_url=opt.solve_result_url or None)
