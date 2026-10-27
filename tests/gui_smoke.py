@@ -239,7 +239,8 @@ def main():
     load(paths[2])
     check("clicking a row shows that image", os.path.basename(win.current or "") == "c.png")
     check("queue holds the browsed images",
-          sorted(win.list.item(i).text() for i in range(win.list.count())) == ["a.png", "b.png", "c.png"],
+          sorted(win.list.item(i).text().split("   ", 1)[-1] for i in range(win.list.count()))
+          == ["a.png", "b.png", "c.png"],
           str([win.list.item(i).text() for i in range(win.list.count())]))
     check("only one queue entry per file", win.list.count() == 3)
 
@@ -516,7 +517,7 @@ def main():
     check("the frame that took its place is shown",
           os.path.basename(win.current or "") == successor, "%s vs %s" % (win.current, successor))
     check("the removed frame leaves the annotation queue",
-          sorted(win.list.item(i).text() for i in range(win.list.count())) == ["c.png"],
+          sorted(win.list.item(i).text().split("   ", 1)[-1] for i in range(win.list.count())) == ["c.png"],
           str([win.list.item(i).text() for i in range(win.list.count())]))
     check("an undo is offered", win._undo_action is not None and "已移入回收站" in win.lbl_info.text(),
           win.lbl_info.text()[:60])
