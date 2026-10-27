@@ -42,7 +42,7 @@ from PyQt5.QtWidgets import (QAbstractButton, QAbstractItemView, QAction, QAppli
 from . import (__version__, catalogs, catalogue, config, debayer, fileop, histview, imageio, piopen, reveal,
                run, style, tickwhale, updater, vizier, wcsio)
 from . import histogram as hist_mod
-from . import annotate, shapes as shapes_mod
+from . import annotate, shapes as shapes_mod, skyregion
 from .i18n import set_language, t
 
 ACCENT = "#68E098"
@@ -3821,9 +3821,13 @@ class MainWindow(QMainWindow):
                         extra_shape = shapes_mod.online_shape(P, self._target_obj, tkey) if tkey else None
                         if extra_shape is not None:
                             fresh.append(extra_shape)
+                    res = self.results.get(self.current)
+                    if res is not None and getattr(res, "sky", None):
+                        # 星野图：重建的轮廓也要按天空掩膜过一遍，否则换一个星表就把地景上的标注又画回来
+                        fresh = [s for s in fresh
+                                 if skyregion.allows(res.sky, s.get("x"), s.get("y"))]
                     data = (fresh, data[1], data[2])
                     self.overlay_data[self.current] = data
-                    res = self.results.get(self.current)
                     if res is not None:
                         res.shapes = fresh
                 except Exception:

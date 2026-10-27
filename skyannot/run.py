@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from . import annotate, catalogs, catalogue, grid, imageio, refine, render, shapes, starfind, vizier, wcsio
+from . import annotate, catalogs, catalogue, grid, imageio, refine, render, shapes, skyregion, starfind, vizier, wcsio
 # the solver module is bound as `solver`: this file also defines a public function called solve(), and the two
 # names collided — inside solve() the name referred to the function, so every solver lookup died with an
 # AttributeError that the loop recorded as "ttastro/nova failed" and quietly moved on from
@@ -68,6 +68,7 @@ class Result:
     notes: list = field(default_factory=list)
     blocks: list = field(default_factory=list)   # catalogue blocks: what the text file is written from
     online: list = field(default_factory=list)   # online records inside the field (region query)
+    sky: object = None                           # nightscape sky/foreground grid (skyregion.build), None = all sky
     saved: bool = False                          # the outputs were written to disk
 
 
@@ -621,6 +622,30 @@ def solve(image_path: str, opt: Options, log=print, progress=lambda p, msg: None
             if sh is not None:
                 res.shapes.append(sh)
         res.grid = grid.compute(wcs, img.width, img.height)
+        # 星野图：地景盖住的那部分不标注。判据来自画面本身（星点密度 + 纹理，见 skyregion.py），
+        # 只在很广的画幅上启用；普通深空图整幅都是天空，掩膜返回 None，什么都不变。
+        if area >= 500.0:
+            res.sky = skyregion.prepare(det, disp, img.width, img.height)
+        if res.sky:
+            hidden = 0
+            kept = []
+            for sh in res.shapes:
+                if skyregion.allows(res.sky, sh.get("x"), sh.get("y")):
+                    kept.append(sh)
+                else:
+                    hidden += 1
+            res.shapes = kept
+            named = []
+            for row in res.named:
+                if skyregion.allows(res.sky, row.x, row.y):
+                    named.append(row)
+                else:
+                    hidden += 1
+            res.named = named
+            notes.append("地景占画面的 %.0f%%，其上的标注已隐藏（%d 个）"
+                         % (100.0 * (1.0 - skyregion.coverage(res.sky)), hidden))
+            log("  sky/foreground: %.0f%% sky, %d annotations hidden"
+                % (100.0 * skyregion.coverage(res.sky), hidden))
         stats["objects"] = {b.name: len(b.rows) for b in blocks}
         log("  " + ", ".join("%s %d" % kv for kv in stats["objects"].items()))
 
