@@ -30,7 +30,7 @@ TTASTRO_IMAGE_URL = "https://ttastro.com/api/i/solve_image"
 TTASTRO_RESULT_URL = "https://ttastro.com/api/i/solve_result"
 
 
-def remote_image(display_rgb, api_key="", timeout=540.0, log=print, pixscale=None,
+def remote_image(display_rgb, api_key="", timeout=540.0, log=print, pixscale=None, astrometry_key="",
                  image_url=None, result_url=None):
     """Solve a frame the local solvers could not: upload an 800 px thumbnail to our own service.
 
@@ -58,6 +58,8 @@ def remote_image(display_rgb, api_key="", timeout=540.0, log=print, pixscale=Non
     body = {"image": b64, "w": im.size[0], "h": im.size[1], "cpu_s": 120}
     if thumb_scale:
         body["pixscale"] = round(thumb_scale, 3)
+    if (astrometry_key or "").strip():
+        body["astrometry_key"] = astrometry_key.strip()   # 用起用户自己的 nova 额度
     url = (image_url or TTASTRO_IMAGE_URL)
     res_url = (result_url or TTASTRO_RESULT_URL)
     d = None

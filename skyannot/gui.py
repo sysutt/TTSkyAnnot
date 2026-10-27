@@ -1876,6 +1876,9 @@ class SettingsDialog(FramedDialog):
         row_key.addWidget(self.apikey)
         row_key.addWidget(b_key)
         f.addRow(t("在线解析密钥"), row_key)
+        self.astrokey = QLineEdit(cfg.get("astrometry_key", ""))
+        self.astrokey.setPlaceholderText(t("可留空；填写后优先使用你自己的 nova 额度"))
+        f.addRow(t("astrometry.net 密钥"), self.astrokey)
         self.astap = QLineEdit(cfg.get("astap_path", ""))
         b = QPushButton(t("浏览…"))
         b.clicked.connect(lambda: self._browse(self.astap, file=True))
@@ -1980,6 +1983,7 @@ class SettingsDialog(FramedDialog):
     def values(self):
         self.cfg.update(language=self.lang.currentData(), theme=self.theme_name(),
                         api_key=self.apikey.text().strip(),
+                        astrometry_key=self.astrokey.text().strip(),
                         astap_path=self.astap.text().strip(), gaia_mag=self.gmag.value(),
                         out_dir=self.out.text().strip(), slide_interval=self.slide.value(),
                         pixinsight_path=self.pi.text().strip(),
