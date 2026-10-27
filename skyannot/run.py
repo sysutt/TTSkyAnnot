@@ -531,12 +531,22 @@ def solve(image_path: str, opt: Options, log=print, progress=lambda p, msg: None
                 _time.sleep(0.2)
                 continue
             _time.sleep(0.2)
+        if not winner:
+            try:
+                solver.kill_astap()
+            except Exception:
+                pass
         if not winner and opt.remote_fallback and not remote_started:
             # nothing was left running (every fast solver refused immediately): give the upload its turn
             th = threading.Thread(target=_remote, daemon=True)
             th.start()
             th.join()
         if winner:
+            # 已经有引擎给出结果，别的解析（ASTAP 最慢，可能还在跑）立刻收手，不占 CPU
+            try:
+                solver.kill_astap()
+            except Exception:
+                pass
             w0, info, name = winner["w"]
             log("  solved by %s" % name)
             progress(0.40, "refine")
