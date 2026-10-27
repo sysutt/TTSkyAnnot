@@ -150,6 +150,45 @@ def _tan_wcs(crval, crpix, cd):
     return w
 
 
+def exif_pixscale(path):
+    """像素尺度（角秒/像素）从照片自己的 EXIF 算：焦距 + 焦平面分辨率。
+
+    星野图的星点很少，盲扫尺度是块解最慢也最容易失败的一步；相机把焦距和传感器像素间距
+    都写进了 EXIF，换算出来的尺度误差通常在 1% 以内，足够当先验。算不出就返回 None。
+    """
+    try:
+        from PIL import Image
+    except ImportError:
+        return None
+    try:
+        with Image.open(path) as im:
+            ex = im.getexif()
+            ifd = ex.get_ifd(0x8769) if hasattr(ex, "get_ifd") else {}
+    except Exception:
+        return None
+
+    def num(src, key):
+        v = src.get(key)
+        if v is None:
+            return None
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            try:
+                return float(v[0]) / float(v[1])
+            except Exception:
+                return None
+
+    focal = num(ifd, 37386) or num(ex, 37386)          # FocalLength, mm
+    fpr = num(ifd, 41486) or num(ex, 41486)            # FocalPlaneXResolution, pixels per unit
+    unit = num(ifd, 41488) or num(ex, 41488) or 2.0    # 2 = inch, 3 = centimetre
+    if not focal or not fpr or focal <= 1.0:
+        return None
+    pitch = (25.4 if unit == 2 else 10.0) / fpr        # pixel pitch, mm
+    ps = 206264.806 * pitch / focal
+    return ps if 0.2 <= ps <= 600.0 else None
+
+
 # ───────────────────────────── ttastro.com ─────────────────────────────
 def solve_ttastro(stars, width, height, hint=None, log=print, timeout=60.0, max_wait=90.0, api_key=""):
     """stars: [(x, y, flux, ...)] in index coordinates, brightest first.
@@ -240,16 +279,21 @@ def solve_ttastro(stars, width, height, hint=None, log=print, timeout=60.0, max_
 
 
 # ───────────────────────────── ASTAP (offline) ─────────────────────────────
-def solve_wide(stars, width, height, log=print, timeout=180.0):
+def solve_wide(stars, width, height, log=print, timeout=300.0, pixscale=None):
     """超广域/星野图：整幅 gnomonic 匹配在几十度视场上必然失败，改由服务端分块 + 亮星复核。
 
-    返回 (wcs, info)；info 里带 mode="wide" 与 accuracy_deg，调用方据此降低标注精度要求。
+    服务端把画面切成二三十度的块逐块盲解，再用亮星对全画幅拟合一次并复核；返回的
+    ra/dec 就是画面中心（不是某个块的中心），cd 是像素→度的矩阵。
+    星点要尽量多给：一块 34° 的星野只有几十颗星时，盲解成功率会掉到零。
     """
     import requests
     from . import __version__
     payload = {"w": int(width), "h": int(height),
                "stars": [[round(float(s[0]), 2), round(float(s[1]), 2), round(float(s[2]), 1)]
-                         for s in stars[:400]]}
+                         for s in stars[:3000]]}
+    if pixscale:
+        # 给了尺度，服务端就不用盲扫；块解从二三十秒降到几秒，成功率也高得多
+        payload["pixscale"] = round(float(pixscale), 3)
     if len(payload["stars"]) < 24:
         raise SolveError("too few stars for a wide-field solve (%d)" % len(payload["stars"]))
     r = requests.post(TTASTRO_WIDE_URL, json=payload,
@@ -264,10 +308,12 @@ def solve_wide(stars, width, height, log=print, timeout=180.0):
     w = _tan_wcs((d["ra"], d["dec"]), (width / 2.0 + 1.0, height / 2.0 + 1.0), cd)
     info = {"solver": "wide-tiles", "mode": "wide", "ra": d.get("ra"), "dec": d.get("dec"),
             "accuracy_deg": d.get("accuracy_deg"), "bright_stars": d.get("bright_stars"),
-            "resid_px": d.get("resid_px"), "pixscale": d.get("pixscale"),
+            "resid_px": d.get("rms_px"), "rms_deg": d.get("rms_deg"),
+            "pixscale": d.get("pixscale"), "sky_coverage": d.get("sky_coverage"),
             "matched": d.get("bright_stars")}
-    log("  wide-field: %.2f°, %.1f\"/px, %s bright stars matched"
-        % (d.get("accuracy_deg") or 0, d.get("pixscale") or 0, d.get("bright_stars")))
+    log("  wide-field: %.1f\", %.2f°/px, %s bright stars (RMS %.2f px = %.3f°)"
+        % (d.get("pixscale") or 0, (d.get("pixscale") or 0) / 3600.0,
+           d.get("bright_stars"), d.get("rms_px") or 0, d.get("rms_deg") or 0))
     return w, info
 
 
