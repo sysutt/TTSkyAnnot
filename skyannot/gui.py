@@ -3293,8 +3293,20 @@ class MainWindow(QMainWindow):
                 first_row = row
         self.cfg["last_dir"] = os.path.dirname(paths[0])
         self._files_user_closed = False
+        self._renumber_files()
         if select:
             self.list.setCurrentRow(first_row)
+
+    def _renumber_files(self):
+        """Prefix each row with its position, so the user can see how many files are queued and which one
+        is on screen ("7 / 214"). The path stays in UserRole; the text is display only."""
+        n = self.list.count()
+        for i in range(n):
+            it = self.list.item(i)
+            if it is None:
+                continue
+            path = it.data(Qt.UserRole) or ""
+            it.setText("%*d / %d   %s" % (len(str(n)), i + 1, n, os.path.basename(path)))
 
     def _row_changed(self, row):
         if row >= 0:
@@ -4670,6 +4682,7 @@ class MainWindow(QMainWindow):
         for row in range(self.list.count() - 1, -1, -1):
             if self.list.item(row).data(Qt.UserRole) == path:
                 self.list.takeItem(row)
+        self._renumber_files()
         if self._loaded_path == path:
             self._loaded_path = None
 
