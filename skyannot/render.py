@@ -149,40 +149,23 @@ def render(display_rgb, shapes, named_rows, out_path, max_edge=4000, quality=92,
             lim_x, lim_y = 4.0 * OW, 4.0 * OH
             pts = [(min(max(x, -lim_x), 2 * lim_x), min(max(y, -lim_y), 2 * lim_y)) for x, y in pts]
             if tstyle.get("sketch"):
-                # A hand-drawn outline, not a trembling one: the deviation is a smooth function of the position
-                # along the shape (two low-frequency waves), so the line curves gently instead of buzzing. Two
-                # or three loops, each starting elsewhere and overshooting its start, cross like a pen going
-                # round twice.
-                import math as _m, random as _rnd
-                base_amp = max(1.5 * SS, edge / 700.0)
-                n = len(pts)
-                loops = ((max(2, lw), 1.0), (max(1, lw // 2), 2.2), (max(1, lw // 2), 3.4))
-                for wid, amp_k in loops:
-                    amp = base_amp * amp_k
-                    w1 = _rnd.uniform(1.5, 3.5)          # waves around the outline
-                    w2 = _rnd.uniform(3.0, 6.0)
-                    p1, p2 = _rnd.uniform(0, 2 * _m.pi), _rnd.uniform(0, 2 * _m.pi)
-                    dx, dy = _rnd.uniform(-amp, amp), _rnd.uniform(-amp, amp)
-                    if closed and n >= 6:
-                        a0 = _rnd.randint(0, n - 2)
-                        span = int(n * _rnd.uniform(1.06, 1.22))
-                        seq = [pts[(a0 + i) % n] for i in range(span)]
-                        length = float(n)
-                    else:
-                        a0 = _rnd.randint(0, max(0, n - 4))
-                        span = int(n * _rnd.uniform(0.55, 1.0))
-                        seq = pts[a0:a0 + max(2, span)]
-                        length = float(max(2, len(seq)))
-                    j = []
-                    for i, (x, y) in enumerate(seq):
-                        th = 2 * _m.pi * i / length
-                        d = amp * (_m.sin(w1 * th + p1) + 0.5 * _m.sin(w2 * th + p2))
-                        # offset along the local normal so the curve shifts, not the points scatter
-                        nx, ny = j[-1] if j else (0.0, 0.0)
-                        j.append((x + dx + d * 0.6, y + dy + d * 0.4))
-                        _ = (nx, ny)
-                    if len(j) >= 2:
-                        pen.line(j, fill=col, width=wid)
+                # 与网页版 sketchEllipse 同一画法：两遍描线（第二遍大 6%），半径按
+                # sin(3θ)+0.5·sin(5θ) 做低频起伏——像手绘，但不像随机抖动那样毛躁。
+                import math as _m
+                cx0 = sum(q[0] for q in pts) / float(len(pts))
+                cy0 = sum(q[1] for q in pts) / float(len(pts))
+                n = max(1, len(pts))
+                for k, (jr, wob) in enumerate(((1.0, 0.03), (1.06, 0.05))):
+                    ring = []
+                    for idx2, (qx0, qy0) in enumerate(pts):
+                        a = 2.0 * _m.pi * idx2 / n
+                        rr = 1.0 + wob * _m.sin(3 * a + k * 1.7) + 0.5 * wob * _m.sin(5 * a)
+                        ring.append((cx0 + (qx0 - cx0) * jr * rr, cy0 + (qy0 - cy0) * jr * rr))
+                    if closed and len(ring) > 2:
+                        ring.append(ring[0])
+                    if len(ring) > 1:
+                        pen.line(ring, fill=col, width=max(1, lw if k == 0 else max(1, lw // 2)))
+
             else:
                 pen.line(pts + [pts[0]] if closed else pts, fill=col, width=lw)
         if e.get("kind") == "point":
