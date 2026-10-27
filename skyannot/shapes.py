@@ -72,6 +72,23 @@ def _axis_for(d, outlined_pts) -> tuple:
     maj = d.maj or 0.0
     if not maj:
         return None, 0.0, 0.0
+    # 目录尺寸常常只是核心：M76 目录 1.12'，实际约 2.7'。轮廓是画面上真实可见的范围，
+    # 它比目录尺寸更大时就用轮廓的角半径——否则「圆圈」会比画面上的天体小一大截。
+    if outlined_pts:
+        try:
+            import math as _m
+            dec0 = float(d.dec)
+            cosd = max(0.05, _m.cos(_m.radians(dec0)))
+            rmax = 0.0
+            for ra_v, dec_v in outlined_pts:
+                dra = ((float(ra_v) - float(d.ra) + 180.0) % 360.0) - 180.0
+                dd = float(dec_v) - dec0
+                rmax = max(rmax, _m.hypot(dra * cosd, dd))
+            maj_outline = 2.0 * rmax * 60.0          # 角分（直径）
+            if maj_outline > maj:
+                maj = maj_outline
+        except Exception:
+            pass
     minor = d.minr or maj
     if getattr(d, "pa", None) is not None:
         return float(d.pa), maj, minor
