@@ -296,12 +296,34 @@ def solve_wide(stars, width, height, log=print, timeout=300.0, pixscale=None):
         payload["pixscale"] = round(float(pixscale), 3)
     if len(payload["stars"]) < 24:
         raise SolveError("too few stars for a wide-field solve (%d)" % len(payload["stars"]))
-    r = requests.post(TTASTRO_WIDE_URL, json=payload,
-                      headers={"User-Agent": "TTSkyAnnot/%s (Windows)" % __version__}, timeout=timeout)
-    try:
-        d = r.json()
-    except ValueError:
-        raise SolveError("wide solver returned HTTP %d" % r.status_code)
+    headers = {"User-Agent": "TTSkyAnnot/%s (Windows)" % __version__}
+    # A server deploy leaves a few seconds of 502s; the wide solve is the last resort, so a dropped
+    # connection must not throw away the whole attempt (a 4xx is about the request and is not retried).
+    d = None
+    last = ""
+    for attempt in range(3):
+        r = None
+        try:
+            r = requests.post(TTASTRO_WIDE_URL, json=payload, headers=headers, timeout=timeout)
+        except Exception as e:
+            last = str(e)[:120]
+        if r is not None:
+            if r.status_code == 200:
+                try:
+                    d = r.json()
+                except ValueError:
+                    d, last = None, "unreadable answer"
+                if d is not None:
+                    break
+            else:
+                last = "HTTP %d" % r.status_code
+                if r.status_code < 500:
+                    break
+        if attempt < 2:
+            log("  wide solver: %s, retrying in %.0f s (%d/2)" % (last, 2.0 * (attempt + 1), attempt + 1))
+            time.sleep(2.0 * (attempt + 1))
+    if d is None:
+        raise SolveError("wide solver failed (%s)" % (last or "no answer"))
     if not d.get("ok"):
         raise SolveError(d.get("reason") or "wide solve failed")
     cd = d.get("cd") or []
