@@ -275,6 +275,9 @@ def _treasure(im, ctx):
     pts = [(x, y) for _n, x, y in (ctx.get("objects") or [])]
     if len(pts) > 1:
         for i in range(len(pts) - 1):
+            # 先画一条奶油色粗虚线做底，再叠红色细虚线：在红色星云上也看得见
+            _dashed(d, [pts[i], pts[i + 1]], (243, 228, 192, 235), max(2, int(4 * s)),
+                    max(6, int(10 * s)), max(4, int(7 * s)))
             _dashed(d, [pts[i], pts[i + 1]], red, max(1, int(2 * s)),
                     max(6, int(10 * s)), max(4, int(7 * s)))
     d.rectangle([6 * s, 6 * s, W - 7 * s, H - 7 * s], outline=ink, width=max(1, int(2 * s)))
