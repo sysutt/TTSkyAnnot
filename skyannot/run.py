@@ -457,74 +457,106 @@ def solve(image_path: str, opt: Options, log=print, progress=lambda p, msg: None
                     d, close = check
                     log("  the header's solution does not match the stars (%d matched, closest %.1f px); "
                         "solving instead" % (close, float(np.min(d))))
-        for name in opt.solvers:
-            if wcs is not None:
-                break
-            progress(0.15, "solve:" + name)
-            try:
-                if name == "ttastro":
-                    w0, info = solver.solve_ttastro(st, img.width, img.height, hint, log=log, api_key=opt.api_key)
-                elif name == "astap":
-                    found = solver.find_astap(opt.astap_path)
-                    if not found:
-                        # say so rather than skipping in silence: a path set in the settings that cannot be
-                        # used is the most common reason the offline solver never runs
-                        tried = solver.astap_candidates(opt.astap_path)
-                        log("  astap not found - looked at: %s" % ", ".join(tried or ["(no path configured)"]))
-                        errors.append("astap: not found, looked at %s" % ", ".join(tried) if tried
-                                      else "astap: no path configured and none installed")
-                        continue
-                    w0, info = solver.solve_astap(disp, hint, exe=found, log=log)
-                else:
-                    continue
-                log("  solved by %s" % name)
-                progress(0.40, "refine")
-                # A catalogue outage must not throw away a solution the solver already delivered: without
-                # Gaia stars the frame keeps the solver's own WCS, a little less precise but annotated.
-                try:
-                    ra, de, mag, gaia_rows, gaia_capped, gaia_cap = _reference_stars(
-                        w0, img.width, img.height, epoch, opt.gaia_mag, opt.gaia_max_rows, log)
-                    wcs, stats = refine.refine(w0, det, img.width, img.height, ra, de, mag, log=log)
-                except Exception as cat_err:
-                    log("  refinement skipped: %s" % cat_err)
-                    ra, de, mag, gaia_rows, gaia_capped, gaia_cap = None, None, None, [], None, None
-                    wcs, stats = w0, {"refined": False}
-                stats["solver"] = name
-                for key in ("rotation", "north_angle", "parity"):
-                    if info.get(key) is not None:
-                        stats[key] = info[key]
-                break
-            except Exception as e:                     # wrong or failed solve -> next solver
+        # The solvers are tried at the same time and the first answer wins: ttastro and ASTAP both take
+        # seconds, and running them one after the other made every failed attempt cost the full budget.
+        # The thumbnail upload is slower and puts load on the service, so it only joins when the fast
+        # pair has had a head start.
+        import threading
+        import time as _time
+        winner = {}
+        errlock = threading.Lock()
+
+        def _note(name, e):
+            with errlock:
                 errors.append("%s: %s" % (name, e))
-                log("  %s failed: %s" % (name, e))
+            log("  %s failed: %s" % (name, e))
+
+        def _ttastro():
+            try:
+                w0, info = solver.solve_ttastro(st, img.width, img.height, hint, log=log, api_key=opt.api_key)
+                winner.setdefault("w", (w0, info, "ttastro"))
+            except Exception as e:
+                _note("ttastro", e)
+
+        def _astap():
+            try:
+                found = solver.find_astap(opt.astap_path)
+                if not found:
+                    tried = solver.astap_candidates(opt.astap_path)
+                    log("  astap not found - looked at: %s" % ", ".join(tried or ["(no path configured)"]))
+                    _note("astap", "not found, looked at %s" % ", ".join(tried)
+                          if tried else "astap: no path configured and none installed")
+                    return
+                w0, info = solver.solve_astap(disp, hint, exe=found, log=log)
+                winner.setdefault("w", (w0, info, "astap"))
+            except Exception as e:
+                _note("astap", e)
+
+        def _remote():
+            try:
+                w0, rinfo = solver.remote_image(disp, api_key=opt.api_key, astrometry_key=opt.astrometry_key,
+                                                log=log, pixscale=hint.get("pixscale"),
+                                                image_url=opt.solve_image_url or None,
+                                                result_url=opt.solve_result_url or None)
+                if w0 is not None:
+                    winner.setdefault("w", (w0, rinfo, rinfo.get("solver", "remote")))
+            except Exception as e:
+                log("  remote image solver failed: %s" % e)
+
+        fast = [n for n in opt.solvers if n in ("ttastro", "astap")]
+        threads = []
+        names = []
+        for name in fast:
+            fn = _ttastro if name == "ttastro" else _astap
+            th = threading.Thread(target=fn, daemon=True)
+            th.start()
+            threads.append(th)
+            names.append(name)
+        t_start = _time.time()
+        remote_started = False
+        while threads:
+            threads = [th for th in threads if th.is_alive()]
+            if winner:
+                break
+            if not remote_started and opt.remote_fallback and _time.time() - t_start > 12.0:
+                remote_started = True
+                log("  fast solvers still running, the image upload joins them")
+                th = threading.Thread(target=_remote, daemon=True)
+                th.start()
+                threads.append(th)
+            if not threads and (remote_started or not opt.remote_fallback):
+                break
+            if not threads and opt.remote_fallback and not remote_started:
+                _time.sleep(0.2)
+                continue
+            _time.sleep(0.2)
+        if not winner and opt.remote_fallback and not remote_started:
+            # nothing was left running (every fast solver refused immediately): give the upload its turn
+            th = threading.Thread(target=_remote, daemon=True)
+            th.start()
+            th.join()
+        if winner:
+            w0, info, name = winner["w"]
+            log("  solved by %s" % name)
+            progress(0.40, "refine")
+            try:
+                ra, de, mag, gaia_rows, gaia_capped, gaia_cap = _reference_stars(
+                    w0, img.width, img.height, epoch, opt.gaia_mag, opt.gaia_max_rows, log)
+                wcs, stats = refine.refine(w0, det, img.width, img.height, ra, de, mag, log=log)
+            except Exception as cat_err:
+                log("  refinement skipped: %s" % cat_err)
+                ra, de, mag, gaia_rows, gaia_capped, gaia_cap = None, None, None, [], None, None
+                wcs, stats = w0, {"refined": False}
+            stats["solver"] = name
+            for key in ("rotation", "north_angle", "parity"):
+                if info.get(key) is not None:
+                    stats[key] = info[key]
         weak = bool(wcs is not None and not stats.get("remote") and (stats.get("matched") or 0) < 12)
         if weak:
             # a solution where only a handful of catalogue stars line up is usually a wrong match (it can
             # even be rotated 180 degrees); it must not be trusted just because the solver returned it
             log("  本地方案只有 %d 颗参考星吻合，改用缩略图接口复核…" % (stats.get("matched") or 0))
-        if (wcs is None or weak) and opt.remote_fallback:
-            # The local solvers need a FITS header or a Messier field nearby; a thumbnail upload lets the
-            # service extract its own stars and race its astrometry.net against nova. Slow (minutes) but it
-            # is the only path for arbitrary screenshots and processed pictures.
-            try:
-                log("  正在识别星场，可能需要几分钟…")
-                w0, rinfo = solver.remote_image(disp, api_key=opt.api_key, astrometry_key=opt.astrometry_key, log=log,
-                                               pixscale=hint.get("pixscale"),
-                                               image_url=opt.solve_image_url or None,
-                                               result_url=opt.solve_result_url or None)
-            except Exception as e:
-                log("  remote image solver failed: %s" % e)
-                w0, rinfo = None, {}
-            if w0 is not None:
-                try:
-                    ra, de, mag, gaia_rows, gaia_capped, gaia_cap = _reference_stars(
-                        w0, img.width, img.height, epoch, opt.gaia_mag, opt.gaia_max_rows, log)
-                    wcs, stats = refine.refine(w0, det, img.width, img.height, ra, de, mag, log=log)
-                except Exception as e:
-                    log("  refinement skipped: %s" % e)
-                    wcs, stats = w0, {"refined": False}
-                stats["solver"] = rinfo.get("solver", "remote")
-
+        # The upload already ran as part of the race; a weak solution is left to the caller to reject.
         if wcs is None:
             raise RuntimeError("could not solve the image (" + "; ".join(errors or ["no solver available"]) + ")")
         res.wcs, res.stats = wcs, stats
