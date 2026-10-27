@@ -58,7 +58,8 @@ if (-not $Version) {
     switch ($Bump) {
         "major" { $maj++; $min = 0; $pat = 0 }
         "minor" { $min++; $pat = 0 }
-        default { $pat++ }
+        "patch" { $pat++ }
+        default { $min++; $pat = 0 }      # 默认改为第二位递增（1.3 -> 1.4）
     }
     $Version = "$maj.$min.$pat"
 }
