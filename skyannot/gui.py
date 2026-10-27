@@ -3782,6 +3782,10 @@ class MainWindow(QMainWindow):
             self.logbox.appendPlainText("效果预览失败: %s: %s" % (type(e).__name__, e))
 
     def _refresh_overlay(self):
+        # 「效果预览」关掉就显示原图：不再叠加任何标注（这是用户明确要求的行为）
+        if getattr(self, "act_preview", None) is None or not self.act_preview.isChecked():
+            self.view.clear_overlay()
+            return
         if getattr(self, "act_preview", None) is not None and self.act_preview.isChecked():
             self.view.clear_overlay()      # the rendered preview already has the annotations
             self._schedule_preview_refresh()
