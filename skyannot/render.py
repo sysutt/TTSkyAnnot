@@ -265,10 +265,12 @@ def render(display_rgb, shapes, named_rows, out_path, max_edge=4000, quality=92,
         elif tstyle.get("chip"):
             dr.rounded_rectangle(best, radius=3 * SS, fill=(2, 4, 10, 168),
                                  outline=col[:3] + (200,), width=max(1, int(round(SS))))
+        # 奶油色标签块上必须用深色字：恒星名原来是浅色，压在同一块浅底上几乎看不见
+        text_col = (58, 38, 18, 255) if tstyle.get("label_bg") == "cream" else col
         if tstyle.get("glow"):
-            dr.text((best[0] + LP, best[1] + LP), text, font=f, fill=col,
-                    stroke_width=max(1, SS), stroke_fill=col[:3] + (90,))
-        dr.text((best[0] + LP, best[1] + LP), text, fill=col, font=f)
+            dr.text((best[0] + LP, best[1] + LP), text, font=f, fill=text_col,
+                    stroke_width=max(1, SS), stroke_fill=text_col[:3] + (90,))
+        dr.text((best[0] + LP, best[1] + LP), text, fill=text_col, font=f)
     ov = ov.resize((W2, H2), Image.LANCZOS)
     im = Image.alpha_composite(im.convert("RGBA"), ov).convert("RGB")
     if tstyle.get("decor"):
