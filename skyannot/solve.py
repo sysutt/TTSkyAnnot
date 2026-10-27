@@ -12,6 +12,7 @@ import json
 import os
 import shutil
 import subprocess
+import threading
 import tempfile
 import time
 
@@ -377,6 +378,23 @@ def astap_db_hint(exe: str, look=None) -> str:
             % "/".join(wide or sorted(db)))
 
 
+_ASTAP_PROC = None
+_ASTAP_LOCK = threading.Lock()
+
+
+def kill_astap():
+    """Stop a running ASTAP. Called when another engine has already answered: a solve that is no longer
+    needed must not keep a core busy (ASTAP can run for a minute on a dense field)."""
+    global _ASTAP_PROC
+    with _ASTAP_LOCK:
+        proc = _ASTAP_PROC
+    if proc is not None and proc.poll() is None:
+        try:
+            proc.kill()
+        except Exception:
+            pass
+
+
 def solve_astap(display_rgb, hint=None, exe=None, log=print, timeout=180):
     """Write a temporary 16-bit FITS of the display luminance and let ASTAP solve it."""
     from astropy.io import fits
@@ -400,8 +418,25 @@ def solve_astap(display_rgb, hint=None, exe=None, log=print, timeout=180):
             args += ["-fov", "%.4f" % fov]
         else:
             args += ["-fov", "0"]
-        proc = subprocess.run(args, capture_output=True, timeout=timeout,
-                              creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        global _ASTAP_PROC
+        proc = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        with _ASTAP_LOCK:
+            _ASTAP_PROC = proc
+        try:
+            _out, _err = proc.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.communicate()
+            raise SolveError("astap timed out")
+        finally:
+            with _ASTAP_LOCK:
+                _ASTAP_PROC = None
+        class _R:
+            returncode = proc.returncode
+            stdout = _out or b""
+            stderr = _err or b""
+        proc = _R()
         wf = os.path.join(tmpd, "frame.wcs")
         if not os.path.exists(wf):
             # ASTAP keeps its verdict in an INI beside the FITS; its own text and that verdict say far more

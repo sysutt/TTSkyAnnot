@@ -1185,12 +1185,23 @@ def main():
     with open(os.path.join(TMP, "d80_0101.1476"), "wb") as fh:
         fh.write(b"stub")
     real_run = solvemod.subprocess.run
+    _RealPopen = solvemod.subprocess.Popen
     real_mkdtemp = solvemod.tempfile.mkdtemp
     scratch = os.path.join(TMP, "astap_tmp")
     os.makedirs(scratch, exist_ok=True)
     solvemod.tempfile.mkdtemp = lambda prefix="", suffix="", dir=None: scratch
-    solvemod.subprocess.run = lambda *a, **k: type("P", (), {"stdout": b"", "stderr": b"no solution found",
-                                                             "returncode": 1})()
+    # solve_astap 现在用 Popen（这样别的引擎先解出时能 kill 掉它），stub 也跟着换
+    class _FakeProc:
+        returncode = 1
+        def __init__(self, *a, **k):
+            self.stdout = self.stderr = None
+        def communicate(self, timeout=None):
+            return b"", b"no solution found"
+        def poll(self):
+            return 1
+        def kill(self):
+            pass
+    solvemod.subprocess.Popen = _FakeProc
     try:
         try:
             solvemod.solve_astap(np.zeros((20, 20, 3), np.float32), {}, exe=exe)
@@ -1198,7 +1209,7 @@ def main():
         except Exception as e:                              # noqa: BLE001
             said = str(e)
     finally:
-        solvemod.subprocess.run = real_run
+        solvemod.subprocess.Popen = _RealPopen
         solvemod.tempfile.mkdtemp = real_mkdtemp
     check("a failed ASTAP run reports ASTAP's own words", "no solution found" in said, said)
     check("and explains the likely database cause", "H17 or H18" in said, said)
