@@ -163,7 +163,20 @@ def solve_ttastro(stars, width, height, hint=None, log=print, timeout=60.0, max_
         headers = {"User-Agent": "TTSkyAnnot/%s (Windows)" % __version__}
         if (api_key or "").strip():
             headers["X-API-Key"] = api_key.strip()
-        r = requests.post(TTASTRO_URL, json=payload, headers=headers, timeout=timeout)
+        # 网络抖动（SSL EOF、连接重置）不该直接让 ttastro 判负：短退避重试两次
+        last_err = None
+        r = None
+        for attempt in range(3):
+            try:
+                r = requests.post(TTASTRO_URL, json=payload, headers=headers, timeout=timeout)
+                break
+            except Exception as e:
+                last_err = e
+                if attempt < 2:
+                    log("  ttastro: 连接失败，%.0f 秒后重试（%d/2）" % (1.5 * (attempt + 1), attempt + 1))
+                    time.sleep(1.5 * (attempt + 1))
+        if r is None:
+            raise SolveError("ttastro unreachable: %s" % str(last_err)[:120])
         try:
             d = r.json()
         except ValueError:
