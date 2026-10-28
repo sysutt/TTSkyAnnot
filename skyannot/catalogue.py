@@ -70,14 +70,8 @@ def counts() -> dict:
             numbers.add(int(num))
     n["m"] = len(numbers) + (0 if 102 in numbers else 1)
     n["sh2"] = len(catalogs.sharpless())
-    # Caldwell 没有单独的数据文件：它是 OpenNGC 记录上的 C 编号（addendum.csv 里的 C009 等）
-    seen_c = set()
-    for d in catalogs.openngc():
-        for text in aliases_of(d):
-            up = str(text).upper().replace(" ", "")
-            if up.startswith("C") and up[1:].isdigit():
-                seen_c.add(up)
-    n["c"] = len(seen_c)
+    # Caldwell 的编号来自 data/caldwell.csv（109 个），NGC/IC 记录靠别名归入该目录
+    n["c"] = len(_caldwell_tables()[0])
     return n
 PRECEDENCE = {k: i for i, k in enumerate(KEYS)}
 
@@ -113,6 +107,42 @@ def precess_b1950(ra, dec):
         return ra, dec
 
 
+@functools.lru_cache(maxsize=1)
+def _caldwell_tables():
+    """({Caldwell: main designation}, {main designation: Caldwell}) read from data/caldwell.csv.
+
+    Caldwell objects almost all carry an NGC or IC number, so the C number lives only in the alias lists —
+    loading it here lets every NGC/IC record that has a Caldwell counterpart also belong to the C catalogue.
+    """
+    forward, back = {}, {}
+    try:
+        import os
+        path = os.path.join(os.path.dirname(__file__), "data", "caldwell.csv")
+        with open(path, encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line or line.lower().startswith("caldwell,"):
+                    continue
+                c, _, target = line.partition(",")
+                c, target = c.strip().upper(), target.strip().upper().replace(" ", "")
+                if c and target:
+                    forward[c] = target
+                    back.setdefault(target, c)
+    except OSError:
+        pass
+    return forward, back
+
+
+def caldwell_of(entry) -> str:
+    """The Caldwell number of an object when it has one ("" otherwise)."""
+    _fwd, back = _caldwell_tables()
+    for text in (str(_field(entry, "name") or ""), str(_field(entry, "ngcic") or "")):
+        key = text.upper().replace(" ", "")
+        if key in back:
+            return back[key]
+    return ""
+
+
 def aliases_of(entry) -> list:
     """Every designation the record carries: name, NGC/IC number, Messier number and the Identifiers list.
 
@@ -133,6 +163,9 @@ def aliases_of(entry) -> list:
     if raw:
         for part in str(raw).replace(";", ",").split(","):
             add(part)
+    c = caldwell_of(entry)          # NGC/IC 记录上的 C 编号（Caldwell 表里 109 个）
+    if c:
+        add(c)
     return out
 
 
