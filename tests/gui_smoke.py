@@ -1355,7 +1355,7 @@ def main():
     # 4u ── annotation groups are the catalogues, and each object is listed under exactly one
     from skyannot import catalogue as cat                # noqa: E402
     check("the groups are catalogues, in precedence order",
-          [k for k, _t in gui.GROUPS] == ["m", "ngc", "ic", "sh2", "lbn", "ldn", "vdb", "ced", "rcw"],
+          [k for k, _t in gui.GROUPS] == ["m", "ngc", "ic", "sh2", "c", "lbn", "ldn", "vdb", "ced", "rcw"],
           str([k for k, _t in gui.GROUPS]))
     check("they are labelled by catalogue name",
           [t for _k, t in gui.GROUPS][:4] == ["Messier", "NGC", "IC", "Sharpless"],

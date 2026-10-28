@@ -207,20 +207,42 @@ def guess_target(path: str, tickwhale_base: str = "") -> tuple:
     return ()
 
 
+def _designation_keys(shape) -> set:
+    """Every name a shape can be recognised by, so a local M76 and an online "NGC 650" count as one object."""
+    out = set()
+    for field in ("name", "label"):
+        raw = str(shape.get(field) or "")
+        for part in raw.replace("(", " ").replace(")", " ").split():
+            k = part.replace(" ", "").upper()
+            if k:
+                out.add(k)
+    return out
+
+
 def local_overlay_with_online(img, wcs, cats=None, target=None, tickwhale_base=""):
     """Like local_overlay, plus the online records the region query returns (for the overlay and a re-filter)."""
     P = annotate.Projector(wcs, img.width, img.height)
     found = shapes.collect(P, cats=cats)
+    # 本地已经有了的对象不再加一遍：同一目标同时来自 OpenNGC 与在线库时，画面上只能出现一个标注
+    seen = set()
+    for e in found:
+        seen.add(_designation_keys(e))
     recs = online_records(P, cats, tickwhale_base) if tickwhale_base else []
     for rec in recs:
         key = catalogue.catalogue_of(rec)
         extra = shapes.online_shape(P, rec, key) if key else None
-        if extra is not None:
-            found.append(extra)
+        if extra is None:
+            continue
+        dup = _designation_keys(extra)
+        if dup & seen:
+            continue                      # 本地已有同一目标（可能编号不同），跳过在线那份
+        seen |= dup
+        found.append(extra)
     if target:
         key = catalogue.catalogue_of(target)
         extra = shapes.online_shape(P, target, key) if key else None
-        if extra is not None:
+        if extra is not None and not (_designation_keys(extra) & seen):
+            seen |= _designation_keys(extra)
             found.append(extra)
     return found, annotate.named_local(P), grid.compute(wcs, img.width, img.height), recs
 

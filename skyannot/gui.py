@@ -1354,7 +1354,7 @@ class ImageView(QGraphicsView):
                     it.setParentItem(self.overlay)
                 polys, closed = [], False
                 anchors = [(e["x"], e["y"], None)] if e.get("label") else []
-                text = _ascii_label(e.get("name") or e.get("label") or "")
+                text = _ascii_label(e.get("label") or e.get("name") or "")
                 if anchors and text:
                     labels.append((0, anchors, text, col, font, 14, None))
                 continue
@@ -1374,7 +1374,7 @@ class ImageView(QGraphicsView):
                 self._marker(e["x"], e["y"], 6, col)
             anchors = style.label_anchors(e, W, H, polys) if e.get("label") else []
             if anchors:
-                text = _ascii_label(e.get("name") or e.get("label") or "")
+                text = _ascii_label(e.get("label") or e.get("name") or "")
                 prio = 0 if text[:1] == "M" and text[1:2].isdigit() else 1
                 # a big object's name goes in the middle of its own shape (a huge circle labelled at its rim
                 # reads as a label for the sky beside it); small ones keep their label outside

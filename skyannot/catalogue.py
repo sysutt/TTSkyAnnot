@@ -24,6 +24,7 @@ CATALOGUES = (
     ("ngc", "NGC", "NGC 星表（OpenNGC）"),
     ("ic", "IC", "IC 星表（OpenNGC）"),
     ("sh2", "Sharpless", "Sharpless HII 区星表（Sh2-）"),
+    ("c", "Caldwell", "Caldwell 目录（C-）"),
     ("lbn", "LBN", "Lynds 亮星云（在线获取）"),
     ("ldn", "LDN", "Lynds 暗星云（在线获取）"),
     ("vdb", "VdB", "van den Bergh 反射星云（在线获取）"),
@@ -41,6 +42,7 @@ NOTES = {k: n for k, _l, n in CATALOGUES}
 # of object), just a quick way to tell the catalogues apart.
 COLORS = {
     "m": "#FFCF4A", "ngc": "#45D9E6", "ic": "#7FB5FF", "sh2": "#FF7BAE",
+    "c": "#9BE56B",
     "lbn": "#B7A2FF", "ldn": "#8A78E8", "vdb": "#6FD3A8", "ced": "#F2A65A", "rcw": "#E8735A",
 }
 
@@ -68,6 +70,14 @@ def counts() -> dict:
             numbers.add(int(num))
     n["m"] = len(numbers) + (0 if 102 in numbers else 1)
     n["sh2"] = len(catalogs.sharpless())
+    # Caldwell 没有单独的数据文件：它是 OpenNGC 记录上的 C 编号（addendum.csv 里的 C009 等）
+    seen_c = set()
+    for d in catalogs.openngc():
+        for text in aliases_of(d):
+            up = str(text).upper().replace(" ", "")
+            if up.startswith("C") and up[1:].isdigit():
+                seen_c.add(up)
+    n["c"] = len(seen_c)
     return n
 PRECEDENCE = {k: i for i, k in enumerate(KEYS)}
 
@@ -103,29 +113,68 @@ def precess_b1950(ra, dec):
         return ra, dec
 
 
-def catalogue_of(entry) -> str:
-    """Which catalogue an object's own designation puts it in.
+def aliases_of(entry) -> list:
+    """Every designation the record carries: name, NGC/IC number, Messier number and the Identifiers list.
 
-    Messier objects are recognised by the Messier number OpenNGC records for them (an object with one is a
-    Messier object first). Everything else follows the designation, which is what the catalogues are keyed on
-    and is more trustworthy than the object's type: the online database labels Cr399, Mel111 and Tr2 all as
-    planetary nebulae although they are open clusters.
+    One object can hold several numbers at once (C009 is also Sh2-155 and NGC 7635-adjacent entries carry both
+    an NGC and a Sh2 alias), so the catalogue of an object must be decided from all of them, not from `name`.
     """
-    if _field(entry, "messier"):
+    out = []
+
+    def add(v):
+        v = str(v or "").strip()
+        if v and v not in out:
+            out.append(v)
+
+    add(_field(entry, "name"))
+    add(_field(entry, "ngcic"))
+    add(_field(entry, "messier"))
+    raw = _field(entry, "Identifiers") or _field(entry, "identifiers") or ""
+    if raw:
+        for part in str(raw).replace(";", ",").split(","):
+            add(part)
+    return out
+
+
+def key_for_designation(text: str) -> str:
+    """The catalogue a single designation belongs to ("" when it is not one we know)."""
+    up = str(text or "").upper().replace(" ", "")
+    if not up:
+        return ""
+    if up.startswith("M") and up[1:].isdigit():
         return "m"
-    up = str(_field(entry, "name")).upper().replace(" ", "")
     if up.startswith("NGC"):
         return "ngc"
     if up.startswith("IC"):
         return "ic"
     if up.startswith(("SH2-", "SH2", "SH-", "SHARPLESS")):
         return "sh2"
+    if up.startswith("C") and up[1:].isdigit():
+        return "c"
     for prefix, key in (("LBN", "lbn"), ("LDN", "ldn"), ("VDB", "vdb"),
                         ("CED", "ced"), ("RCW", "rcw")):
         if up.startswith(prefix):
             return key
     return ""
 
+
+def catalogue_of(entry) -> str:
+    """Which catalogue an object belongs to, by the priority Messier > NGC > IC > Sh2 > C > LBN > LDN > VdB > Ced > RCW.
+
+    The decision is taken over *all* designations the record carries, not just `name`: an object listed as
+    C009 that also carries the alias Sh2-155 belongs to Sharpless, because Sh2 outranks Caldwell.
+    """
+    if _field(entry, "messier"):
+        return "m"
+    best = ""
+    best_rank = len(KEYS) + 1
+    for text in aliases_of(entry):
+        key = key_for_designation(text)
+        if key and key in KEYS:
+            rank = KEYS.index(key)
+            if rank < best_rank:
+                best, best_rank = key, rank
+    return best
 
 def key_of(entry) -> str:
     """A stable identity for an object, so the same object coming from two lists is one object.
@@ -171,9 +220,13 @@ def memberships(entries) -> dict:
             keys.append("ngc")
         elif ngcic.startswith("IC"):
             keys.append("ic")
-        own = catalogue_of(e)
-        if own and own not in keys:
-            keys.append(own)
+        # 每一个编号都算成员（C009 同时属于 Sh2 与 Caldwell），顺序按优先级排列，
+        # 这样关掉高优先级目录时会自然落到下一个
+        for text in aliases_of(e):
+            k2 = key_for_designation(text)
+            if k2 and k2 not in keys:
+                keys.append(k2)
+        keys.sort(key=lambda k: KEYS.index(k) if k in KEYS else 99)
         if keys:
             out.setdefault(key_of(e), [])
             for k in keys:

@@ -135,7 +135,7 @@ def render(display_rgb, shapes, named_rows, out_path, max_edge=4000, quality=92,
             pen.line([(x - r, y + r), (x + r, y - r)], fill=halo, width=max(4, lw * 2 + 1))
             pen.line([(x - r, y - r), (x + r, y + r)], fill=col, width=max(3, lw * 2))
             pen.line([(x - r, y + r), (x + r, y - r)], fill=col, width=max(3, lw * 2))
-            labels.append(([(x, y, None)], e.get("name") or e.get("label") or "", col, font,
+            labels.append(([(x, y, None)], e.get("label") or e.get("name") or "", col, font,
                            r + 4 * SS, None))
             continue
         polys, closed = shapes_mod.display_polygons(e, shape_style)
@@ -198,7 +198,7 @@ def render(display_rgb, shapes, named_rows, out_path, max_edge=4000, quality=92,
             ins = style.inside_anchor(polys)
             if ins is not None:
                 ins = (ins[0] * ks, ins[1] * ks, ins[2] * ks, ins[3] * ks)
-            text = _ascii_label(e.get("name") or e["label"])
+            text = _ascii_label(e.get("label") or e.get("name") or "")
             labels.append(([(x * ks, y * ks, u) for x, y, u in anchors], text, col, font, gap, ins))
     if glow is not None:
         gl = glow.resize((W2, H2), Image.LANCZOS).filter(__import__("PIL.ImageFilter", fromlist=["ImageFilter"]).GaussianBlur(max(2, int(edge / 900))))

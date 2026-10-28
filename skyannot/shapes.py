@@ -269,6 +269,30 @@ def _label_for(entry, key: str) -> str:
     return base + (" %s" % common if common else "")
 
 
+def _local_label_for(name: str, fallback_category: str):
+    """(label, category) for an online record: reuse the local OpenNGC designation when the object is known.
+
+    The online catalogue keys an object by a single number, so M76 arrives as "NGC 650". The bundled catalogue
+    knows every designation of that object, and the agreed priority (Messier > NGC > IC > Sh2 > C > LBN > LDN >
+    VdB > Ced > RCW) decides what the picture shows. Unknown objects keep the online name.
+    """
+    from . import catalogue as cat
+    try:
+        from . import catalogs
+        key = str(name or "").replace(" ", "").upper()
+        for d in catalogs.openngc():
+            names = [str(getattr(d, "name", "") or ""), str(getattr(d, "ngcic", "") or ""),
+                     str(getattr(d, "messier", "") or "")]
+            if any(n.replace(" ", "").upper() == key for n in names if n):
+                k2 = cat.catalogue_of(d)
+                if k2:
+                    return _label_for(d, k2), k2
+                break
+    except Exception:
+        pass
+    return str(name or ""), fallback_category
+
+
 def online_shape(P, rec, category):
     """A shape for a record that is not in the bundled data (the object named in the target field).
 
@@ -286,7 +310,10 @@ def online_shape(P, rec, category):
         return None
     name = str(rec["name"])
     common = str(rec.get("common") or "").strip()
-    shape = {"name": name, "label": name + (" " + common if common and common != name else ""),
+    # 在线库只给一个编号（常是 "NGC 650"，而用户认的是 M76）：先在本地 OpenNGC 里按任意别名找到它，
+    # 找到就沿用本地那条记录的优先级与标签（M76 (NGC650)），不要直接显示在线库的名字。
+    label, category = _local_label_for(name, category)
+    shape = {"name": name, "label": label,
              "catalog": "Online", "category": category, "type": rec.get("type") or "Neb",
              "ra": ra, "dec": dec, "x": round(float(x[0]), 2), "y": round(float(y[0]), 2),
              "source": "tickwhale", "kind": "point", "polygons": []}
