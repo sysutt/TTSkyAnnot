@@ -2504,11 +2504,25 @@ class _UpdateDownload(QThread):
                     should_stop=lambda: self.stop)
                 self.done.emit(path, "")
                 return
-            zip_path = updater.download(
-                self.base, self.feed, folder,
-                progress=lambda done, total: self.progress.emit(done, total),
-                should_stop=lambda: self.stop)
-            self.done.emit(updater.unpack(zip_path), "")
+            try:
+                zip_path = updater.download(
+                    self.base, self.feed, folder,
+                    progress=lambda done, total: self.progress.emit(done, total),
+                    should_stop=lambda: self.stop)
+                unpacked = updater.unpack(zip_path)
+            finally:
+                # 下载目录（118 MB 的 zip）用完就删；解包目录要留给交换脚本，由下次启动的 sweep_temp 清理
+                try:
+                    import shutil as _sh, os as _os
+                    if self.mode != "setup":
+                        _sh.rmtree(folder, ignore_errors=True)
+                    else:
+                        for _n in _os.listdir(folder):
+                            _os.remove(_os.path.join(folder, _n))
+                        _os.rmdir(folder)
+                except Exception:
+                    pass
+            self.done.emit(unpacked, "")
         except Exception as e:
             self.done.emit("", str(e))
 
@@ -4982,6 +4996,13 @@ def main(files=None):
     try:
         from . import shellex
         shellex.register()
+    except Exception:
+        pass
+    # 清掉上次更新残留（%TEMP% 里的 zip 与解包目录，每个约 400 MB）
+    try:
+        from . import updater
+        updater.sweep_temp()
+        updater.cleanup_old(updater.app_dir())
     except Exception:
         pass
     cfg = config.load()
