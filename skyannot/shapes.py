@@ -263,6 +263,13 @@ def _label_for(entry, key: str) -> str:
         ngcic = getattr(entry, "ngcic", "")
         if ngcic and ngcic != base:
             base = "%s (%s)" % (base, ngcic)
+    elif key == "c":
+        # 在 Caldwell 分组下用 C 编号作主名，NGC/IC 号放括号里（与 Messier 的写法一致）
+        from . import catalogue as _cat
+        cnum = _cat.caldwell_of(entry)
+        base = entry.name
+        if cnum:
+            base = "%s (%s)" % (cnum, entry.name) if entry.name.upper().replace(" ", "") != cnum else cnum
     else:
         base = entry.name
     common = getattr(entry, "common", "")
