@@ -285,6 +285,47 @@ del "%~f0"
     return raw
 
 
+def sweep_temp(max_age_hours: float = 6.0, log=None) -> int:
+    """Delete this program's leftovers in %TEMP%: the downloaded package, the unpacked copy, stray zips.
+
+    Every update needs a download folder and a staging folder, and the swap happens after the window closes,
+    so the process that created them is often gone before they could be removed. They are large (a 118 MB
+    package plus ~300 MB unpacked), so they are swept on start-up instead: anything older than `max_age_hours`
+    is from a finished update and safe to delete. Returns the number of entries removed.
+    """
+    import time as _t
+    root = tempfile.gettempdir()
+    cutoff = _t.time() - max_age_hours * 3600.0
+    removed = 0
+    try:
+        entries = os.listdir(root)
+    except OSError:
+        return 0
+    for name in entries:
+        low = name.lower()
+        mine = low.startswith("ttskyannot-pkg-") or low.startswith("ttskyannot-update-") \
+            or (low.startswith("ttskyannot-") and low.endswith(".zip"))
+        if not mine:
+            continue
+        path = os.path.join(root, name)
+        try:
+            if os.path.getmtime(path) > cutoff:
+                continue                      # an update may be running right now
+        except OSError:
+            continue
+        try:
+            if os.path.isdir(path):
+                shutil.rmtree(path, ignore_errors=True)
+            else:
+                os.remove(path)
+            removed += 1
+            if log is not None:
+                log("removed leftover %s" % name)
+        except OSError:
+            pass
+    return removed
+
+
 def cleanup_old(target: str) -> None:
     """Remove the previous install a swap left behind (`<folder>.old`), if it is still there."""
     if not target:
