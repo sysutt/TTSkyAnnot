@@ -16,6 +16,7 @@ what makes the overlay readable. Only the grouping and the counts follow the cat
 from __future__ import annotations
 
 import functools
+import os
 import re
 
 # (key, label, note) in precedence order: the first enabled catalogue that lists an object claims it.
@@ -116,8 +117,8 @@ def _caldwell_tables():
     """
     forward, back = {}, {}
     try:
-        import os
-        path = os.path.join(os.path.dirname(__file__), "data", "caldwell.csv")
+        from . import catalogs as _cats
+        path = os.path.join(_cats.data_dir(), "caldwell.csv")
         with open(path, encoding="utf-8") as fh:
             for line in fh:
                 line = line.strip()
