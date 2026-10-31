@@ -883,6 +883,8 @@ class EmptyHint(QGraphicsItem):
         super().__init__()
         self._title = t("拖入图片，或点这里打开")
         self._sub = t("支持 FITS / XISF / TIFF / JPG / PNG")
+        # 提示是界面元素，不是画面内容：滚轮缩放时它不该跟着放大缩小
+        self.setFlag(QGraphicsItem.ItemIgnoresTransformations, True)
         self.setVisible(False)
 
     def boundingRect(self):
