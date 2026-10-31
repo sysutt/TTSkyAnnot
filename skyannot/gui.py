@@ -1899,6 +1899,29 @@ class SettingsDialog(FramedDialog):
         self.astrokey.setEchoMode(QLineEdit.Password)
         self.astrokey.setPlaceholderText(t("可留空；填写后优先使用你自己的 nova 额度"))
         f.addRow(t("astrometry.net 密钥"), self.astrokey)
+        # 拍摄设备：像元尺寸 + 焦距 → 像素尺度，解析时作为尺度提示（比盲扫快得多）
+        self.pixel_um = DoubleSpinBox()
+        self.pixel_um.setRange(0.0, 20.0)
+        self.pixel_um.setDecimals(2)
+        self.pixel_um.setSingleStep(0.1)
+        self.pixel_um.setValue(float(cfg.get("pixel_um", 0) or 0))
+        self.pixel_um.setSpecialValueText(t("未填写"))
+        self.pixel_um.setToolTip(t("相机像元尺寸（微米）。2600MM 是 3.76，294MC 是 4.63，"
+                                   "填了它和焦距就能算出像素尺度"))
+        row_equip = QHBoxLayout()
+        row_equip.setContentsMargins(0, 0, 0, 0)
+        row_equip.addWidget(self.pixel_um)
+        self.focal_mm = DoubleSpinBox()
+        self.focal_mm.setRange(0.0, 5000.0)
+        self.focal_mm.setDecimals(1)
+        self.focal_mm.setSingleStep(10.0)
+        self.focal_mm.setValue(float(cfg.get("focal_mm", 0) or 0))
+        self.focal_mm.setSpecialValueText(t("未填写"))
+        self.focal_mm.setToolTip(t("望远镜/镜头的实际焦距（毫米）"))
+        row_equip.addWidget(QLabel(t("mm")))
+        row_equip.addWidget(self.focal_mm)
+        f.addRow(t("像元（µm）/ 焦距"), row_equip)
+
         self.astap = QLineEdit(cfg.get("astap_path", ""))
         b = QPushButton(t("浏览…"))
         b.clicked.connect(lambda: self._browse(self.astap, file=True))
@@ -2004,6 +2027,8 @@ class SettingsDialog(FramedDialog):
         self.cfg.update(language=self.lang.currentData(), theme=self.theme_name(),
                         api_key=self.apikey.text().strip(),
                         astrometry_key=self.astrokey.text().strip(),
+                        pixel_um=float(self.pixel_um.value()),
+                        focal_mm=float(self.focal_mm.value()),
                         astap_path=self.astap.text().strip(), gaia_mag=self.gmag.value(),
                         out_dir=self.out.text().strip(), slide_interval=self.slide.value(),
                         pixinsight_path=self.pi.text().strip(),
