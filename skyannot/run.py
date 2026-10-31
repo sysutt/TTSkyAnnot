@@ -410,7 +410,7 @@ def _trusts_existing(check, width, height) -> bool:
     return float(np.min(d)) <= 1.0
 
 
-def solve(image_path: str, opt: Options, log=print, progress=lambda p, msg: None):
+def solve(image_path: str, opt: Options, log=print, progress=lambda p, msg: None, should_stop=None):
     """Everything up to (but not including) writing: load, detect, solve, refine, project catalogues.
     Returns (LoadedImage or None, Result, display-ready array or None) and touches no user file.
 
@@ -421,7 +421,14 @@ def solve(image_path: str, opt: Options, log=print, progress=lambda p, msg: None
     res = Result(image=image_path)
     t0 = time.time()
     img = disp = None
+
+    def _check():
+        """Called between stages: a cancelled run stops before it spends another minute solving."""
+        if should_stop is not None and should_stop():
+            raise RuntimeError("已取消")
+
     try:
+        _check()
         progress(0.02, "load")
         img = imageio.load(image_path, want_debayer=opt.debayer,
                            pattern="" if opt.bayer_pattern == "auto" else opt.bayer_pattern)
@@ -447,6 +454,7 @@ def solve(image_path: str, opt: Options, log=print, progress=lambda p, msg: None
         epoch = _epoch(hint.get("date"), image_path)
         log("%s: %d x %d %s%s" % (os.path.basename(image_path), img.width, img.height, img.fmt.upper(),
                                   ", linear data (auto-stretched)" if img.linear else ""))
+        _check()
         progress(0.08, "stars")
         st = starfind.find_stars(disp, max_stars=3000)
         log("  %d stars detected" % len(st))
@@ -541,6 +549,12 @@ def solve(image_path: str, opt: Options, log=print, progress=lambda p, msg: None
             threads = [th for th in threads if th.is_alive()]
             if winner:
                 break
+            if should_stop is not None and should_stop():
+                try:
+                    solver.kill_astap()
+                except Exception:
+                    pass
+                raise RuntimeError("已取消")
             if not remote_started and opt.remote_fallback and _time.time() - t_start > 12.0:
                 remote_started = True
                 log("  fast solvers still running, the image upload joins them")
