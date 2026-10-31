@@ -768,7 +768,7 @@ def main():
     solved = {}                                          # stand in for the solver: no network in a test
     real_solve = run.solve
 
-    def fake_solve(path, opt, log=print, progress=lambda f, m: None):
+    def fake_solve(path, opt, log=print, progress=lambda f, m: None, should_stop=None):
         img = iio.load(path)
         w = WCS(naxis=2)                                 # a real solution: the write-back path is exercised
         w.wcs.ctype = ["RA---TAN", "DEC--TAN"]
@@ -885,7 +885,7 @@ def main():
     grabbed = {}
     real_solve2 = run.solve
 
-    def grab_hint(path, opt, log=print, progress=lambda f, m: None):
+    def grab_hint(path, opt, log=print, progress=lambda f, m: None, should_stop=None):
         grabbed["radec"] = opt.target_radec
         grabbed["target"] = opt.target
         img = iio.load(path)
