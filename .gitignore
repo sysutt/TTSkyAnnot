@@ -20,3 +20,4 @@ packaging/$BACKUP_FILE.txt
 setup/
 .git-backup-*/
 packaging/$BACKUP_FILE.txt
+packaging/deploy.local.ps1
