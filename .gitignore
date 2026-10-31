@@ -18,3 +18,5 @@ packaging/$BACKUP_FILE.txt
 .scratch*/
 .testfeed/
 setup/
+.git-backup-*/
+packaging/$BACKUP_FILE.txt
