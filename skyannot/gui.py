@@ -893,7 +893,7 @@ class EmptyHint(QGraphicsItem):
     def paint(self, p, _opt, _widget=None):
         p.setRenderHint(QPainter.Antialiasing, True)
         top = -self.H / 2.0
-        icon = QRectF(-42, top + 2, 84, 84)
+        icon = QRectF(-34, top + 2, 68, 68)
         p.setPen(QPen(QColor(C["fg5"]), 1, Qt.DashLine))
         p.setBrush(Qt.NoBrush)
         p.drawRoundedRect(icon, 20, 20)
@@ -909,13 +909,13 @@ class EmptyHint(QGraphicsItem):
         p.setPen(Qt.NoPen)
         p.drawEllipse(QPointF(icon.left() + 24, icon.top() + 24), 2.2, 2.2)
         f = QFont()
-        f.setPointSize(15)
+        f.setPointSize(12)          # 提示不随缩放走之后，字号要小一档才不显得压画面
         f.setWeight(QFont.DemiBold)
         p.setFont(f)
         p.setPen(QColor(C["fg2"]))
         p.drawText(QRectF(-self.W / 2.0, top + 92, self.W, 30), Qt.AlignHCenter | Qt.AlignTop, self._title)
         f2 = QFont()
-        f2.setPointSize(10)
+        f2.setPointSize(9)
         p.setFont(f2)
         p.setPen(QColor(C["fg4"]))
         p.drawText(QRectF(-self.W / 2.0, top + 128, self.W, 24), Qt.AlignHCenter | Qt.AlignTop, self._sub)
