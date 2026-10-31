@@ -699,6 +699,16 @@ class AnnotateWorker(QThread):
         self.items, self.opt = items, opt     # [(index, path)]
         self._answer = None
         self._reply = threading.Event()
+        self._stop = False
+
+    def cancel(self):
+        """Ask the run to stop. A solve in flight notices between stages, and a pending save prompt is let go."""
+        self._stop = True
+        self._answer = {}
+        self._reply.set()
+
+    def stopped(self) -> bool:
+        return self._stop
 
     def answer(self, flags):
         """Called by the main thread with what to write (see MainWindow._save_prompt)."""
@@ -712,8 +722,11 @@ class AnnotateWorker(QThread):
             tag = "[%d/%d] " % (idx + 1, total)
             log = lambda m, _t=tag: self.log.emit(_t + m)
             try:
+                if self._stop:
+                    break
                 img, res, disp = run.solve(path, self.opt, log=log,
-                                           progress=lambda f, msg, i=idx: self.progress.emit(i, f))
+                                           progress=lambda f, msg, i=idx: self.progress.emit(i, f),
+                                           should_stop=lambda: self._stop)
                 if res.ok:
                     self._reply.clear()
                     self._answer = None
@@ -3245,6 +3258,12 @@ class MainWindow(QMainWindow):
         self.btn_start.setStyleSheet(BUTTON_QSS)
         self.btn_start.clicked.connect(self.start)
         lay.addWidget(self.btn_start)
+        # 解析可能要跑一两分钟（远程 astrometry 尤其慢），必须能中途停手
+        self.btn_cancel = QPushButton(t("取消解析"))
+        self.btn_cancel.setStyleSheet(BUTTON_QSS)
+        self.btn_cancel.setVisible(False)
+        self.btn_cancel.clicked.connect(self.cancel_run)
+        lay.addWidget(self.btn_cancel)
 
         row = QHBoxLayout()
         row.setSpacing(6)
@@ -4223,6 +4242,9 @@ class MainWindow(QMainWindow):
             self.list.item(r).setText("⏳ " + os.path.basename(self.list.item(r).data(Qt.UserRole)))
         self.btn_start.setEnabled(False)
         self.btn_start.setText(t("处理中…"))
+        if getattr(self, "btn_cancel", None) is not None:
+            self.btn_cancel.setVisible(True)
+            self.btn_cancel.setEnabled(True)
         self.prog.setValue(0)
         self._n_items, self._k_done = len(items), 0
         w = AnnotateWorker(items, opt, self)
@@ -4233,6 +4255,16 @@ class MainWindow(QMainWindow):
         w.finished.connect(self._all_done)
         self.worker = w
         w.start()
+
+    def cancel_run(self):
+        """Stop the run in progress: the worker is asked to give up, and the panel says so."""
+        w = getattr(self, "worker", None)
+        if w is None:
+            return
+        w.cancel()
+        self.btn_cancel.setEnabled(False)
+        self.btn_cancel.setText(t("正在取消…"))
+        self.logbox.appendPlainText(t("已请求取消解析，正在停止…"))
 
     def _save_prompt(self, worker, res, path):
         """The worker has finished an image and is waiting: ask before anything is written. Everything is
@@ -4342,6 +4374,8 @@ class MainWindow(QMainWindow):
     def _all_done(self):
         self.btn_start.setEnabled(True)
         self.btn_start.setText(t("解析并标注"))
+        if getattr(self, "btn_cancel", None) is not None:
+            self.btn_cancel.setVisible(False)
         self.prog.setValue(1000)
 
     def open_folder(self):
