@@ -32,7 +32,9 @@ DEFAULTS = {
     "language": "",            # "" = follow the system, "zh" or "en"
     "theme": "dark",           # dark | graphite | night, see gui.THEMES
     "nova_api_key": "",          # no longer used: nova runs server-side now
-    "astrometry_key": "",        # optional: the user's own nova key, sent with remote solves
+    "astrometry_key": "",
+    "pixel_um": 0.0,             # camera pixel size in microns (0 = unknown)
+    "focal_mm": 0.0,             # real focal length in mm (0 = unknown)        # optional: the user's own nova key, sent with remote solves
     "solve_image_url": "https://ttastro.com/api/i/solve_image",
     "solve_result_url": "https://ttastro.com/api/i/solve_result",
     "annotation_style": "science",

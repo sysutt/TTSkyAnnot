@@ -33,7 +33,9 @@ class Options:
     solvers: tuple = ("ttastro", "astap")
     astap_path: str = ""
     api_key: str = ""
-    astrometry_key: str = ""      # 用户自己的 astrometry.net key（可选，服务端优先用）                # ttastro online solve key (empty = anonymous allowance)
+    astrometry_key: str = ""
+    pixel_um: float = 0.0            # 相机像元尺寸（微米），与焦距一起算出像素尺度
+    focal_mm: float = 0.0            # 实际焦距（毫米）      # 用户自己的 astrometry.net key（可选，服务端优先用）                # ttastro online solve key (empty = anonymous allowance)
     gaia_mag: float = 16.0
     debayer: bool = True             # interpolate a one-shot colour mosaic before solving or annotating
     bayer_pattern: str = "auto"      # "auto" = the header's BAYERPAT, else one of debayer.PATTERNS
@@ -436,6 +438,11 @@ def solve(image_path: str, opt: Options, log=print, progress=lambda p, msg: None
         hint = imageio.hints(img)
         if opt.target:
             hint["target"] = opt.target.strip()
+        if not hint.get("pixscale") and opt.pixel_um and opt.focal_mm:
+            # 206.265 = 每弧度角秒数（180*3600/π）：像元(µm)/焦距(mm) 换算成 ″/px
+            hint["pixscale"] = 206.265 * float(opt.pixel_um) / float(opt.focal_mm)
+            log("  用设备参数算出像素尺度：%.3f″/px（像元 %.2fµm / 焦距 %.0fmm）"
+                % (hint["pixscale"], opt.pixel_um, opt.focal_mm))
         if opt.target_radec:
             # the position of the object the user picked wins over the header's pointing: a mount's own
             # coordinates are the target it was sent to, not necessarily where the frame is centred, and the
