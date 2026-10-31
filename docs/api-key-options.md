@@ -8,7 +8,7 @@
 | 调用方 | 路径 | 服务端看到的来源 | 特征 |
 |---|---|---|---|
 | 桌面端 TTSkyAnnot | 直连 `https://ttastro.com/api/i/solve` | 每个用户自己的公网 IP | `python-requests`（可以改成 `TTSkyAnnot/<ver>`） |
-| 晴天小程序 | 小程序 → jiaowa 后端 `https://app.online_dso.com/astro`（`a: astrometry_solve`）→ ttastro | 固定为 jiaowa 的出口 IP **$SERVER_HOST** | `GuzzleHttp`，带 `tkid` / `token` |
+| 晴天小程序 | 小程序 → jiaowa 后端 `/astro`（`a: astrometry_solve`）→ ttastro | 固定为 jiaowa 的出口 IP **$SERVER_HOST** | `GuzzleHttp`，带 `tkid` / `token` |
 
 关键点：**小程序不直连 ttastro**（域名未备案，微信不允许），所有小程序请求都由 jiaowa 一台机器转发，所以在 ttastro 这一侧看起来都是同一个 IP。任何按单 IP 的限流如果不把这一台机器单独处理，就会把所有小程序用户一起限死。
 

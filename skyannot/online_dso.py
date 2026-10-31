@@ -18,7 +18,7 @@ import json
 import urllib.error
 import urllib.request
 
-DEFAULT_BASE = "https://app.online_dso.com"
+DEFAULT_BASE = ""
 
 # The server's object types, mapped onto the OpenNGC vocabulary the rest of the program already speaks
 # (shapes.category() switches on those values). The server also uses variants that are not OpenNGC's, so the
@@ -138,6 +138,8 @@ def region(base: str = "", ra: float = 0.0, dec: float = 0.0, radius: float = 1.
 
 
 def _ask(url: str, payload: dict, timeout: float, action: str = "dso_search") -> list:
+    if not str(url).startswith("http"):
+        return []                       # 没有配置在线天体库地址：当作没有这个功能
     body = json.dumps({"a": action, "d": payload}).encode("utf-8")
     req = urllib.request.Request(url, data=body, method="POST",
                                  headers={"Content-Type": "application/json"})

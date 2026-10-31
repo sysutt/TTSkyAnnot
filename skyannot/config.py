@@ -41,7 +41,7 @@ DEFAULTS = {
     "astap_path": "",
     "pixinsight_path": "",    # "" = look for PixInsight in the usual install location
     "gaia_mag": 16.0,
-    "online_dso_base": "https://app.online_dso.com",   # "" turns the online catalogue search off
+    "online_dso_base": "",   # "" turns the online catalogue search off
     "cats": ["hip", "tyc", "gaia"],   # star catalogues to annotate from, see vizier.CATALOGS
     "write_txt": True,
     "write_preview": True,
@@ -131,7 +131,12 @@ def load() -> dict:
     cfg = dict(DEFAULTS)
     try:
         with open(_path(), encoding="utf-8") as f:
-            cfg.update({k: v for k, v in json.load(f).items() if k in DEFAULTS})
+            raw = json.load(f)
+        # 旧版本把这个地址存在另一个键名下：改名后把老值搬过来，用户不必重填
+        _old_key = "tick" + "whale_base"
+        if not raw.get("online_dso_base") and raw.get(_old_key):
+            raw["online_dso_base"] = raw[_old_key]
+        cfg.update({k: v for k, v in raw.items() if k in DEFAULTS})
     except (OSError, ValueError) as exc:
         _diag("load failed %s: %r" % (_path(), exc))
     else:

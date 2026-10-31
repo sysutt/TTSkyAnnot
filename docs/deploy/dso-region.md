@@ -6,7 +6,7 @@
 ## 请求
 
 ```
-POST https://app.online_dso.com/weather
+POST /weather
 Content-Type: application/json
 
 {"a": "dso_region",
@@ -96,7 +96,7 @@ def dso_region(d):
 `dso_search` 也补上了 `angle` 字段。验收：
 
 ```
-curl -s https://app.online_dso.com/weather -H 'Content-Type: application/json' \
+curl -s /weather -H 'Content-Type: application/json' \
   -d '{"a":"dso_region","d":{"ra":60.5,"dec":26.25,"radius":1.2}}'
 # -> total 4: LBN777, LDN1489, LDN1491, LBN775
 ```
@@ -104,7 +104,7 @@ curl -s https://app.online_dso.com/weather -H 'Content-Type: application/json' \
 ## 验收
 
 ```
-curl -s https://app.online_dso.com/weather -H 'Content-Type: application/json' \
+curl -s /weather -H 'Content-Type: application/json' \
   -d '{"a":"dso_region","d":{"ra":60.5,"dec":26.25,"radius":0.5}}' | head -c 300
 ```
 
