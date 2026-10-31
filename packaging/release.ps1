@@ -26,16 +26,16 @@ param(
     [string]$Feed = "E:\SkyAnnot\updates",
     [string]$BuildDir = "E:\SkyAnnot\dist_new\TTSkyAnnot",
     [string]$InstallDir = "E:\SkyAnnot\dist\TTSkyAnnot",
-    [string]$Remote = "$USER@$SERVER_HOST",
-    [string]$RemoteKey = (Join-Path $env:USERPROFILE ".ssh\$SSH_KEY"),
-    [string]$RemoteUpdates = "$DEPLOY_DIR/updates",
+    [string]$Remote = "",
+    [string]$RemoteKey = "",
+    [string]$RemoteUpdates = "",
     [string]$PublicBase = "https://www.ttastro.com/ttskyannot/updates/",
     [switch]$SkipBuild,
     [switch]$SkipInstall,
     [switch]$SkipUpload,
     [switch]$SkipGit,
     [switch]$SkipInstaller,
-    [string]$RemoteSetup = "$DEPLOY_DIR/setup",
+    [string]$RemoteSetup = "",
     [string]$SetupBase = "https://www.ttastro.com/ttskyannot/setup/",
     [string]$InnoPath = ""
 )
@@ -43,6 +43,15 @@ param(
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
 $init = Join-Path $root "skyannot\__init__.py"
+# 服务器地址与路径不写进仓库：从本机 packaging\deploy.local.ps1（已被 .gitignore 忽略）或环境变量读
+$localCfg = Join-Path $PSScriptRoot "deploy.local.ps1"
+if (Test-Path $localCfg) { . $localCfg }
+if (-not $Remote) { $Remote = $env:TTSKY_DEPLOY_REMOTE }
+if (-not $RemoteKey) { $RemoteKey = $env:TTSKY_DEPLOY_KEY }
+if (-not $RemoteUpdates) { $RemoteUpdates = $env:TTSKY_DEPLOY_UPDATES }
+if (-not $RemoteSetup) { $RemoteSetup = $env:TTSKY_DEPLOY_SETUP }
+if (-not $Remote) { Fail "no deploy target: create packaging\deploy.local.ps1 or set TTSKY_DEPLOY_REMOTE" }
+
 $sshOpts = @("-i", $RemoteKey, "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=accept-new")
 
 function Step($text) { Write-Host "== $text" -ForegroundColor Cyan }
