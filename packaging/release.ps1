@@ -1,4 +1,4 @@
-# Release a TTSkyAnnot build end to end: bump the version, build, sign, package, upload to ttastro.com and
+﻿# Release a TTSkyAnnot build end to end: bump the version, build, sign, package, upload to ttastro.com and
 # verify what the public URL serves. Then install the same build here and point it at the public feed.
 #
 #   powershell -File packaging\release.ps1                      # 0.2.0 -> 0.2.1, notes from -Notes
@@ -141,21 +141,38 @@ $size = [int64]$feedData.size
 
 # ── 4. upload (zip first, feed last) ────────────────────────────────────────
 if (-not $SkipUpload) {
-    Step "uploading $([math]::Round($size / 1MB, 1)) MB to $Remote"
-    & ssh @sshOpts $Remote "mkdir -p /tmp/ttskyannot-upload && rm -f /tmp/ttskyannot-upload/*" | Out-Null
-    & scp @sshOpts $zipPath "${Remote}:/tmp/ttskyannot-upload/" | Out-Null
-    if ($LASTEXITCODE -ne 0) { Fail "scp of the package failed" }
+    # 升级包走七牛（媒体域名 media.*）：国内/海外下载都不再经过那台 ARM 服务器
+    $cdnZip = ""
+    if ($QiniuAK -and $QiniuSK -and $QiniuDomain) {
+        Step "uploading $([math]::Round($size / 1MB, 1)) MB to qiniu"
+        $cdnKey = "ttskyannot/updates/$zipName"
+        & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "qiniu_upload.ps1") `
+            -LocalFile $zipPath -Key $cdnKey -AccessKey $QiniuAK -SecretKey $QiniuSK -Bucket $QiniuBucket -Domain $QiniuDomain -UploadHost $QiniuUploadHost | ForEach-Object { Write-Host "   $_" }
+        if ($LASTEXITCODE -ne 0) { Fail "qiniu upload of the package failed" }
+        $cdnZip = ($QiniuDomain.TrimEnd('/') + '/' + $cdnKey)
+        # version.json 里的下载地址指向 CDN（老版本的客户端也认这个字段，无需升级程序）
+        $feedData.url = $cdnZip
+        # 不带 BOM：Python 的 json.loads 读到 BOM 会直接报错
+        $json = $feedData | ConvertTo-Json -Depth 6
+        [IO.File]::WriteAllText($feedPath, $json, (New-Object Text.UTF8Encoding($false)))
+        Write-Host ("   package url: " + $cdnZip) -ForegroundColor Green
+    } else {
+        Step "uploading $([math]::Round($size / 1MB, 1)) MB to $Remote"
+        & ssh @sshOpts $Remote "mkdir -p /tmp/ttskyannot-upload && rm -f /tmp/ttskyannot-upload/*" | Out-Null
+        & scp @sshOpts $zipPath "${Remote}:/tmp/ttskyannot-upload/" | Out-Null
+        if ($LASTEXITCODE -ne 0) { Fail "scp of the package failed" }
+    }
+    & ssh @sshOpts $Remote "mkdir -p /tmp/ttskyannot-upload" | Out-Null
     & scp @sshOpts $feedPath "${Remote}:/tmp/ttskyannot-upload/" | Out-Null
     if ($LASTEXITCODE -ne 0) { Fail "scp of version.json failed" }
     $remoteCmd = "sudo install -d -o www-data -g www-data '$RemoteUpdates' && " +
-                 "sudo mv -f /tmp/ttskyannot-upload/$zipName '$RemoteUpdates/' && " +
                  "sudo mv -f /tmp/ttskyannot-upload/version.json '$RemoteUpdates/' && " +
-                 "sudo chown www-data:www-data '$RemoteUpdates/$zipName' '$RemoteUpdates/version.json' && " +
+                 "sudo chown www-data:www-data '$RemoteUpdates/version.json' && " +
                  "ls -l '$RemoteUpdates'"
     & ssh @sshOpts $Remote $remoteCmd | ForEach-Object { Write-Host "   $_" }
     if ($LASTEXITCODE -ne 0) { Fail "installing the files on the server failed" }
     # the feed only ever points at the newest package, so the server keeps the same two the local folder does
-    $pruneCmd = "cd '$RemoteUpdates' && ls -1t TTSkyAnnot-*.zip | tail -n +3 | xargs -r sudo rm -f && ls -l"
+    $pruneCmd = "cd '$RemoteUpdates' && ls -1t TTSkyAnnot-*.zip 2>/dev/null | tail -n +3 | xargs -r sudo rm -f; ls -l"
     & ssh @sshOpts $Remote $pruneCmd | ForEach-Object { Write-Host "   $_" }
     if ($LASTEXITCODE -ne 0) { Write-Host "   (could not prune the older packages on the server)" -ForegroundColor Yellow }
 }
@@ -164,26 +181,43 @@ if (-not $SkipUpload) {
 if ($setupExe -and (Test-Path $setupExe) -and -not $SkipUpload) {
     Step "uploading the installer"
     $setupName = Split-Path $setupExe -Leaf
-    & scp @sshOpts $setupExe "${Remote}:/tmp/$setupName" | Out-Null
-    if ($LASTEXITCODE -ne 0) {
-        Write-Host "   installer upload failed (skipped)" -ForegroundColor Yellow
-    } else {
-        $cmd = "sudo install -d -o www-data -g www-data '$RemoteSetup' && " +
-               "sudo install -o www-data -g www-data -m 644 '/tmp/$setupName' '$RemoteSetup/$setupName' && " +
-               "sudo install -o www-data -g www-data -m 644 '/tmp/$setupName' '$RemoteSetup/TTSkyAnnot-Setup.exe' && " +
-               "ls -l '$RemoteSetup' | tail -4"
-        & ssh @sshOpts $Remote $cmd | ForEach-Object { Write-Host "   $_" }
-        if ($LASTEXITCODE -ne 0) {
-            Write-Host "   installing the installer on the server failed" -ForegroundColor Yellow
+    $onCdn = $false
+    if ($QiniuAK -and $QiniuSK -and $QiniuDomain) {
+        & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "qiniu_upload.ps1") `
+            -LocalFile $setupExe -Key "ttskyannot/setup/$setupName" -AccessKey $QiniuAK -SecretKey $QiniuSK -Bucket $QiniuBucket -Domain $QiniuDomain -UploadHost $QiniuUploadHost | ForEach-Object { Write-Host "   $_" }
+        if ($LASTEXITCODE -eq 0) {
+            # 网页上的固定下载地址也指向 CDN
+            & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "qiniu_upload.ps1") `
+                -LocalFile $setupExe -Key "ttskyannot/setup/TTSkyAnnot-Setup.exe" -AccessKey $QiniuAK -SecretKey $QiniuSK -Bucket $QiniuBucket -Domain $QiniuDomain -UploadHost $QiniuUploadHost | Out-Null
+            $live = & curl.exe -s -o NUL -w "%{http_code} %{size_download}" ($QiniuDomain.TrimEnd("/") + "/ttskyannot/setup/TTSkyAnnot-Setup.exe")
+            Write-Host ("   live (cdn): " + $live) -ForegroundColor Green
+            $onCdn = $true
         } else {
-            $live = & curl.exe -s -o NUL -w "%{http_code} %{size_download}" ($SetupBase + "TTSkyAnnot-Setup.exe")
-            Write-Host ("   live: " + $live) -ForegroundColor Green
-            # keep the two newest installers on the server as well
+            Write-Host "   qiniu installer upload failed, falling back to scp" -ForegroundColor Yellow
+        }
+    }
+    if (-not $onCdn) {
+        & scp @sshOpts $setupExe "${Remote}:/tmp/$setupName" | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "   installer upload failed (skipped)" -ForegroundColor Yellow
+        } else {
+            $cmd = "sudo install -d -o www-data -g www-data '$RemoteSetup' && " +
+                   "sudo install -o www-data -g www-data -m 644 '/tmp/$setupName' '$RemoteSetup/$setupName' && " +
+                   "sudo install -o www-data -g www-data -m 644 '/tmp/$setupName' '$RemoteSetup/TTSkyAnnot-Setup.exe' && " +
+                   "ls -l '$RemoteSetup' | tail -4"
+            & ssh @sshOpts $Remote $cmd | ForEach-Object { Write-Host "   $_" }
+            if ($LASTEXITCODE -ne 0) {
+                Write-Host "   installing the installer on the server failed" -ForegroundColor Yellow
+            } else {
+                $live = & curl.exe -s -o NUL -w "%{http_code} %{size_download}" ($SetupBase + "TTSkyAnnot-Setup.exe")
+                Write-Host ("   live: " + $live) -ForegroundColor Green
+            }
             $prune = "cd '$RemoteSetup' && ls -1t TTSkyAnnot-Setup-*.exe | tail -n +3 | xargs -r sudo rm -f"
             & ssh @sshOpts $Remote $prune | Out-Null
         }
     }
 }
+
 if ($setupExe -and (Test-Path $setupExe)) {
     # keep the two newest installers locally
     Get-ChildItem (Split-Path $setupExe -Parent) -Filter "TTSkyAnnot-Setup-*.exe" |
@@ -197,10 +231,14 @@ if (-not $SkipUpload) {
     $live = Invoke-RestMethod -Uri ($PublicBase + "version.json") -TimeoutSec 30
     if ($live.version -ne $Version) { Fail "public feed says $($live.version), expected $Version" }
     if ($live.sha256 -ne $sha) { Fail "public feed has a different sha256" }
+    # 包体在 CDN 上：校验实际下载地址，而不是服务器目录
+    $pkgUrl = $live.url
+    if (-not $pkgUrl) { $pkgUrl = $PublicBase + $zipName }
+    if ($pkgUrl -notmatch '^https?://') { $pkgUrl = $PublicBase + $zipName }
     # a HEAD through Invoke-WebRequest is buggy on Windows PowerShell for large files; HttpClient is not
     Add-Type -AssemblyName System.Net.Http
     $client = New-Object System.Net.Http.HttpClient
-    $req = New-Object System.Net.Http.HttpRequestMessage([System.Net.Http.HttpMethod]::Head, ($PublicBase + $zipName))
+    $req = New-Object System.Net.Http.HttpRequestMessage([System.Net.Http.HttpMethod]::Head, $pkgUrl)
     $resp = $client.SendAsync($req).Result
     if (-not $resp.IsSuccessStatusCode) { Fail "the public package answered $([int]$resp.StatusCode)" }
     $liveLen = [int64]$resp.Content.Headers.ContentLength
@@ -208,7 +246,7 @@ if (-not $SkipUpload) {
     if ($liveLen -ne $size) {
         Fail "public package is $liveLen bytes, expected $size"
     }
-    Write-Host "   feed live: version $Version, $([math]::Round($size / 1MB, 1)) MB" -ForegroundColor Green
+    Write-Host ("   feed live: version " + $Version + ", " + [math]::Round($size / 1MB, 1) + " MB, from " + $pkgUrl) -ForegroundColor Green
 }
 
 # ── 6. install here ─────────────────────────────────────────────────────────
