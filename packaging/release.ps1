@@ -146,12 +146,25 @@ if (-not $SkipUpload) {
     if ($QiniuAK -and $QiniuSK -and $QiniuDomain) {
         Step "uploading $([math]::Round($size / 1MB, 1)) MB to qiniu"
         $cdnKey = "ttskyannot/updates/$zipName"
+        # 七牛的键名必须与 nginx 302 的目标一致（$request_uri = /dl/ttskyannot/<name>）
+        $dlKey = "dl/ttskyannot/$zipName"
         & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "qiniu_upload.ps1") `
-            -LocalFile $zipPath -Key $cdnKey -AccessKey $QiniuAK -SecretKey $QiniuSK -Bucket $QiniuBucket -Domain $QiniuDomain -UploadHost $QiniuUploadHost | ForEach-Object { Write-Host "   $_" }
+            -LocalFile $zipPath -Key $dlKey -AccessKey $QiniuAK -SecretKey $QiniuSK -Bucket $QiniuBucket -Domain $QiniuDomain -UploadHost $QiniuUploadHost | ForEach-Object { Write-Host "   $_" }
         if ($LASTEXITCODE -ne 0) { Fail "qiniu upload of the package failed" }
-        $cdnZip = ($QiniuDomain.TrimEnd('/') + '/' + $cdnKey)
+        # 源站也放一份：海外用户直接由东京节点出流
+        & ssh @sshOpts $Remote "mkdir -p /tmp/ttskyannot-upload" | Out-Null
+        & scp @sshOpts $zipPath "${Remote}:/tmp/ttskyannot-upload/$zipName" | Out-Null
+        if ($LASTEXITCODE -ne 0) { Fail "scp of the package (origin copy) failed" }
+        & ssh @sshOpts $Remote "sudo install -d -o www-data -g www-data /var/www/ttastro/dl/ttskyannot && sudo install -o www-data -g www-data -m 644 /tmp/ttskyannot-upload/$zipName /var/www/ttastro/dl/ttskyannot/$zipName" | Out-Null
+        if ($LASTEXITCODE -ne 0) { Fail "installing the package on the origin failed" }
+        $cdnZip = ($QiniuDomain.TrimEnd('/') + '/' + $dlKey)
         # version.json 里的下载地址指向 CDN（老版本的客户端也认这个字段，无需升级程序）
-        $feedData.url = $cdnZip
+        # 客户端统一用这个地址：国内/港澳台在 nginx 302 到七牛，海外直出源站
+        $feedData.url = "https://www.ttastro.com/dl/ttskyannot/$zipName"
+        if ($feedData.PSObject.Properties.Name -contains "setup") {
+            $feedData.setup = "https://www.ttastro.com/dl/ttskyannot/TTSkyAnnot-Setup.exe"
+            if ($feedData.setup_sha256 -and $script:setupExe) { }
+        }
         # 不带 BOM：Python 的 json.loads 读到 BOM 会直接报错
         $json = $feedData | ConvertTo-Json -Depth 6
         [IO.File]::WriteAllText($feedPath, $json, (New-Object Text.UTF8Encoding($false)))
@@ -183,18 +196,27 @@ if ($setupExe -and (Test-Path $setupExe) -and -not $SkipUpload) {
     $setupName = Split-Path $setupExe -Leaf
     $onCdn = $false
     if ($QiniuAK -and $QiniuSK -and $QiniuDomain) {
-        & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "qiniu_upload.ps1") `
-            -LocalFile $setupExe -Key "ttskyannot/setup/$setupName" -AccessKey $QiniuAK -SecretKey $QiniuSK -Bucket $QiniuBucket -Domain $QiniuDomain -UploadHost $QiniuUploadHost | ForEach-Object { Write-Host "   $_" }
-        if ($LASTEXITCODE -eq 0) {
-            # 网页上的固定下载地址也指向 CDN
+        foreach ($k in @("dl/ttskyannot/$setupName", "dl/ttskyannot/TTSkyAnnot-Setup.exe")) {
             & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "qiniu_upload.ps1") `
-                -LocalFile $setupExe -Key "ttskyannot/setup/TTSkyAnnot-Setup.exe" -AccessKey $QiniuAK -SecretKey $QiniuSK -Bucket $QiniuBucket -Domain $QiniuDomain -UploadHost $QiniuUploadHost | Out-Null
-            $live = & curl.exe -s -o NUL -w "%{http_code} %{size_download}" ($QiniuDomain.TrimEnd("/") + "/ttskyannot/setup/TTSkyAnnot-Setup.exe")
-            Write-Host ("   live (cdn): " + $live) -ForegroundColor Green
+                -LocalFile $setupExe -Key $k -AccessKey $QiniuAK -SecretKey $QiniuSK -Bucket $QiniuBucket -Domain $QiniuDomain -UploadHost $QiniuUploadHost | ForEach-Object { Write-Host "   $_" }
+            if ($LASTEXITCODE -ne 0) { $onCdn = $false; break }
             $onCdn = $true
+        }
+        if ($onCdn) {
+            $live = & curl.exe -s -o NUL -w "%{http_code} %{size_download}" ($QiniuDomain.TrimEnd("/") + "/dl/ttskyannot/TTSkyAnnot-Setup.exe")
+            Write-Host ("   live (cdn): " + $live) -ForegroundColor Green
         } else {
             Write-Host "   qiniu installer upload failed, falling back to scp" -ForegroundColor Yellow
         }
+    }
+    # 源站副本：海外用户直接从这里下载
+    & scp @sshOpts $setupExe "${Remote}:/tmp/$setupName" | Out-Null
+    if ($LASTEXITCODE -eq 0) {
+        $cmdDl = "sudo install -d -o www-data -g www-data /var/www/ttastro/dl/ttskyannot && " +
+                 "sudo install -o www-data -g www-data -m 644 '/tmp/$setupName' '/var/www/ttastro/dl/ttskyannot/$setupName' && " +
+                 "sudo install -o www-data -g www-data -m 644 '/tmp/$setupName' '/var/www/ttastro/dl/ttskyannot/TTSkyAnnot-Setup.exe' && " +
+                 "ls -l /var/www/ttastro/dl/ttskyannot | tail -4"
+        & ssh @sshOpts $Remote $cmdDl | ForEach-Object { Write-Host "   $_" }
     }
     if (-not $onCdn) {
         & scp @sshOpts $setupExe "${Remote}:/tmp/$setupName" | Out-Null
